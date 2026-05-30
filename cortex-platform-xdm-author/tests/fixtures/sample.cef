@@ -1,0 +1,2 @@
+CEF:0|AcmeNet|FlowDirector|7.2|17|Blocked outbound connection|6|src=10.0.0.5 dst=198.51.100.42 spt=51234 dpt=443 proto=TCP act=block app=https suser=alice cs1Label=ruleId cs1=NET-2207
+CEF:0|AcmeNet|FlowDirector|7.2|17|Blocked outbound connection|6|src=10.0.0.7 dst=198.51.100.99 spt=51299 dpt=80 proto=TCP act=block app=http suser=bob cs1Label=ruleId cs1=NET-2210

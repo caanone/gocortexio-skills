@@ -1,0 +1,143 @@
+[
+  {
+    "timestamp": "2026-05-29T11:02:14.221Z",
+    "event_id": "evt-adv-001",
+    "product": {
+      "name": "AcmeShield WAF",
+      "version": "5.0.0-beta",
+      "deployment": "hybrid"
+    },
+    "session": {
+      "session_id": "sess-a91c02",
+      "user_id": null,
+      "ip_reputation": {
+        "score": 82,
+        "sources": ["spamhaus", "internal_ml"]
+      }
+    },
+    "network": {
+      "client": {
+        "ip": "191.96.12.44",
+        "port": 51321
+      },
+      "server": {
+        "ip": "203.0.113.10",
+        "port": 443
+      },
+      "protocol": "HTTPS"
+    },
+    "transactions": [
+      {
+        "phase": "request",
+        "http": {
+          "method": "POST",
+          "uri": "/api/v2/upload",
+          "headers": [
+            {"name": "User-Agent", "value": "Mozilla/5.0"},
+            {"name": "Content-Type", "value": "multipart/form-data"},
+            {"name": "X-Forwarded-For", "value": "10.0.0.5"}
+          ],
+          "body_truncated": true,
+          "body_sample": "--boundary\nContent-Disposition: form-data; name=\"file\"; filename=\"shell.php\""
+        }
+      },
+      {
+        "phase": "response",
+        "http": {
+          "status": 403,
+          "headers": [
+            {"name": "Content-Type", "value": "application/json"}
+          ],
+          "body_sample": "{\"error\":\"blocked\"}"
+        }
+      }
+    ],
+    "threats": [
+      {
+        "rule_id": "FILE-550120",
+        "type": "malicious_upload",
+        "category": "rce",
+        "confidence": 0.93,
+        "matched_part": "filename",
+        "matched_value": "shell.php"
+      },
+      {
+        "rule_id": "ANOM-778210",
+        "type": "suspicious_header",
+        "category": "evasion",
+        "confidence": 0.67,
+        "matched_part": "header",
+        "matched_value": "X-Forwarded-For: 10.0.0.5"
+      }
+    ],
+    "anomalies": [
+      {"type": "payload_size", "value": 10485760, "threshold": 5242880},
+      {"type": "request_rate", "value": 45, "threshold": 20}
+    ],
+    "geo": {
+      "country": "BR",
+      "asn": 28573
+    },
+    "tags": ["file-upload", "high-risk", "blocked"],
+    "action": {
+      "type": "block",
+      "status_code": 403,
+      "intercepted": true
+    }
+  },
+  {
+    "timestamp": "2026-05-29T11:05:48.903Z",
+    "event_id": "evt-adv-002",
+    "product": {
+      "name": "AcmeShield WAF",
+      "version": "5.0.0-beta",
+      "deployment": "hybrid"
+    },
+    "session": {
+      "session_id": "sess-a91c02",
+      "user_id": "user-7781",
+      "ip_reputation": {
+        "score": 45,
+        "sources": []
+      }
+    },
+    "network": {
+      "client": {
+        "ip": "191.96.12.44",
+        "port": 51389
+      },
+      "server": {
+        "ip": "203.0.113.10",
+        "port": 443
+      },
+      "protocol": "HTTPS"
+    },
+    "transactions": [
+      {
+        "phase": "request",
+        "http": {
+          "method": "GET",
+          "uri": "/dashboard",
+          "headers": [
+            {"name": "User-Agent", "value": "Mozilla/5.0"},
+            {"name": "Cookie", "value": "session_id=sess-a91c02"}
+          ]
+        }
+      }
+    ],
+    "threats": [],
+    "anomalies": [
+      {"type": "geo_velocity", "value": "high", "details": ["BR -> DE in 5m"]}
+    ],
+    "geo": {
+      "country": "DE",
+      "city": "Frankfurt"
+    },
+    "tags": ["authenticated", "anomalous"],
+    "action": {
+      "type": "monitor",
+      "status_code": 200,
+      "intercepted": false
+    }
+  }
+]

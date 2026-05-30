@@ -1,0 +1,754 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: GoCortexIO
+"""profile_log.py <sample>
+
+Static profiler for raw vendor log samples. Reads a single file,
+detects the format, walks each record into leaf paths, infers types,
+computes null rates, and attaches ranked XDM candidates per field
+from the shipped anchor index.
+
+Output is a JSON worksheet on stdout:
+
+    {
+      "source": "<input path>",
+      "detected_format": "json|jsonl|cef|leef|syslog-5424|syslog-3164|kv|csv|tsv",
+      "record_count": <int>,
+      "fields": [
+        {
+          "path": "transactions[].http.method",
+          "leaf": "method",
+          "type": "string|integer|float|boolean|ip|timestamp|object-array|null",
+          "sample": <representative value or null>,
+          "null_rate": <0.0..1.0>,
+          "in_object_array": <bool>,
+          "xdm_candidates": [
+            {"xdm_path": "...", "frequency": int, "score": int}
+          ]
+        }
+      ],
+      "object_arrays": [
+        {"path": "transactions[]",
+         "discriminator": "phase",
+         "values": ["request", "response"]}
+      ]
+    }
+
+``null_rate`` is per top-level record. For a field inside an object-
+array, multiple elements within a single record collapse to one
+observation, so ``transactions[].http.status`` with
+``null_rate = 0.5`` means the path was absent or null in half the
+records, not in half the transactions.
+
+Pass ``--format text`` for a table instead of JSON.
+
+Exit codes:
+    0   profile produced
+    1   argument error
+    2   cannot read or parse the sample
+
+Scope: describe the log shape. Does not write rule stages, choose an
+array-projection strategy, or validate suggested XDM paths against a
+live tenant. See ../references/workflow.md for the workflow.
+
+Python 3.9+ stdlib only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import io
+import json
+import re
+import sys
+from collections import OrderedDict
+from pathlib import Path
+from typing import Iterable, List, Optional, Tuple
+
+# Shared field-anchor helpers live in _anchor_index so this script and
+# lookup_anchor.py do not duplicate the corpus knowledge.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _anchor_index import (  # noqa: E402
+    build_reverse_index,
+    load_anchors,
+    normalise_synonym,
+)
+
+
+# --------------------------------------------------------------------
+# Format detection
+# --------------------------------------------------------------------
+
+# Order matters: more specific markers first.
+_CEF_HEADER_RE = re.compile(r"^CEF:\d+\|")
+_LEEF_HEADER_RE = re.compile(r"^LEEF:\d+\.\d+\|")
+_SYSLOG_5424_RE = re.compile(
+    r"^<\d{1,3}>\d{1,2}\s+\d{4}-\d{2}-\d{2}T"  # <PRI>VERSION YYYY-MM-DDT...
+)
+_SYSLOG_3164_RE = re.compile(
+    r"^<\d{1,3}>?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s"
+)
+_KV_LINE_RE = re.compile(r"^\s*[a-zA-Z_][\w.-]*=\S")
+
+
+def detect_format(text: str) -> str:
+    """Classify the sample's wire format. Single most-confident answer."""
+    stripped = text.strip()
+    if not stripped:
+        return "unknown"
+
+    # JSON / JSONL: parse-driven detection is the only reliable signal.
+    if stripped[0] in "{[":
+        try:
+            json.loads(stripped)
+            return "json"
+        except json.JSONDecodeError:
+            pass
+    # JSONL: every non-blank line parses as standalone JSON.
+    non_blank = [ln for ln in stripped.splitlines() if ln.strip()]
+    if non_blank and all(ln.lstrip().startswith(("{", "[")) for ln in non_blank):
+        try:
+            for ln in non_blank:
+                json.loads(ln)
+            return "jsonl"
+        except json.JSONDecodeError:
+            pass
+
+    first_line = non_blank[0] if non_blank else ""
+    if _CEF_HEADER_RE.search(first_line):
+        return "cef"
+    if _LEEF_HEADER_RE.search(first_line):
+        return "leef"
+    if _SYSLOG_5424_RE.match(first_line):
+        return "syslog-5424"
+    if _SYSLOG_3164_RE.match(first_line):
+        return "syslog-3164"
+
+    # key=value: at least two `key=value` tokens per line on most lines.
+    kv_like = sum(1 for ln in non_blank if _looks_like_kv(ln))
+    if non_blank and kv_like >= max(1, len(non_blank) // 2):
+        return "kv"
+
+    # CSV / TSV: a header row plus at least one body row, each with the
+    # same delimiter count. Try TAB first (less likely to be a false
+    # positive than comma).
+    csv_format = _detect_delimited(non_blank)
+    if csv_format:
+        return csv_format
+
+    return "unknown"
+
+
+def _looks_like_kv(line: str) -> bool:
+    # Strip CEF / LEEF prefix-extension separator so the tail-as-kv case
+    # does not slip through to a false positive against bare CEF.
+    if _CEF_HEADER_RE.search(line) or _LEEF_HEADER_RE.search(line):
+        return False
+    tokens = re.findall(r"[a-zA-Z_][\w.-]*=", line)
+    return len(tokens) >= 2
+
+
+def _detect_delimited(lines: List[str]) -> Optional[str]:
+    if len(lines) < 2:
+        return None
+    for delim, name in ((",", "csv"), ("\t", "tsv")):
+        first_count = lines[0].count(delim)
+        if first_count < 1:
+            continue
+        if all(ln.count(delim) == first_count for ln in lines[:5]):
+            return name
+    return None
+
+
+# --------------------------------------------------------------------
+# Format-specific record parsers
+# --------------------------------------------------------------------
+
+
+def parse_records(text: str, fmt: str) -> List[dict]:
+    """Convert the raw sample into a list of dict records for
+    flattening. Each format yields one record per logical event."""
+    if fmt == "json":
+        data = json.loads(text)
+        if isinstance(data, list):
+            return [r for r in data if isinstance(r, dict)]
+        if isinstance(data, dict):
+            return [data]
+        raise ValueError("JSON top-level must be an object or array of objects")
+    if fmt == "jsonl":
+        out = []
+        for ln in text.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            obj = json.loads(ln)
+            if isinstance(obj, dict):
+                out.append(obj)
+        return out
+    if fmt == "cef":
+        return [_parse_cef(ln) for ln in _non_blank_lines(text)]
+    if fmt == "leef":
+        return [_parse_leef(ln) for ln in _non_blank_lines(text)]
+    if fmt in ("syslog-5424", "syslog-3164"):
+        # We don't decompose the syslog wrapper itself -- the body is the
+        # interesting payload. Record per line, with the message body
+        # extracted into "_message".
+        return [{"_message": ln} for ln in _non_blank_lines(text)]
+    if fmt == "kv":
+        return [_parse_kv(ln) for ln in _non_blank_lines(text)]
+    if fmt in ("csv", "tsv"):
+        delim = "," if fmt == "csv" else "\t"
+        rdr = csv.DictReader(io.StringIO(text), delimiter=delim)
+        return [dict(row) for row in rdr]
+    return []
+
+
+def _non_blank_lines(text: str) -> List[str]:
+    return [ln for ln in text.splitlines() if ln.strip()]
+
+
+def _parse_cef(line: str) -> dict:
+    """CEF: ``CEF:0|Vendor|Product|Version|SignatureID|Name|Severity|ext``.
+    The extension is space-separated key=value pairs."""
+    # CEF separator is '|' but '\|' inside values is escaped.
+    parts = re.split(r"(?<!\\)\|", line, maxsplit=7)
+    rec: dict = {}
+    if len(parts) >= 7:
+        headers = [
+            "cef_version", "cef_vendor", "cef_product", "cef_version_field",
+            "cef_signature_id", "cef_name", "cef_severity",
+        ]
+        for h, v in zip(headers, parts[:7]):
+            rec[h] = v.replace("\\|", "|")
+        if len(parts) == 8:
+            rec.update(_parse_kv(parts[7]))
+    return rec
+
+
+def _parse_leef(line: str) -> dict:
+    """LEEF: ``LEEF:Version|Vendor|Product|Version|EventID|ext``."""
+    parts = re.split(r"(?<!\\)\|", line, maxsplit=5)
+    rec: dict = {}
+    if len(parts) >= 5:
+        headers = [
+            "leef_version", "leef_vendor", "leef_product",
+            "leef_version_field", "leef_event_id",
+        ]
+        for h, v in zip(headers, parts[:5]):
+            rec[h] = v.replace("\\|", "|")
+        if len(parts) == 6:
+            # LEEF extension delimiter may be tab or '|' or the value of
+            # `delimChar` field within the extension; default is tab.
+            rec.update(_parse_kv(parts[5].replace("\t", " ")))
+    return rec
+
+
+_KV_TOKEN_RE = re.compile(
+    r"([a-zA-Z_][\w.-]*)=(\"(?:[^\"\\]|\\.)*\"|\S*)"
+)
+
+
+def _parse_kv(line: str) -> dict:
+    """Best-effort key=value parser. Supports `key="quoted value"` and
+    `key=bareword`."""
+    out: dict = {}
+    for m in _KV_TOKEN_RE.finditer(line):
+        k, v = m.group(1), m.group(2)
+        if v.startswith('"') and v.endswith('"') and len(v) >= 2:
+            v = v[1:-1].replace('\\"', '"')
+        out[k] = v
+    return out
+
+
+# --------------------------------------------------------------------
+# Flattening
+# --------------------------------------------------------------------
+
+
+_HEADER_PAIR_KEYS = ({"name", "value"}, {"key", "value"})
+
+
+def _is_header_pair_array(arr: list) -> bool:
+    """Detect ``[{name: X, value: Y}, ...]`` (or key/value) so the named
+    items surface as fields rather than positional array entries."""
+    if not arr or not all(isinstance(el, dict) for el in arr):
+        return False
+    for shape in _HEADER_PAIR_KEYS:
+        if all(shape.issubset(el.keys()) for el in arr):
+            return True
+    return False
+
+
+def flatten_record(rec: dict) -> "OrderedDict[str, object]":
+    """Walk a single record into ``{path: value}`` leaf entries.
+
+    Object arrays produce a synthetic entry with the array path (value
+    is the list of inner dicts; the caller infers element schema and
+    discriminator), AND per-leaf entries with ``[]`` in the path so a
+    consumer can render ``transactions[].http.method``.
+
+    Primitive arrays surface as a single entry with the path unchanged
+    and value of type ``list`` (the type inference handles arrays).
+
+    Header-pair arrays (``[{name: X, value: Y}, ...]``) also surface
+    each ``name`` as a synthetic field at ``<path>[name=<X>]``.
+    """
+    out: "OrderedDict[str, object]" = OrderedDict()
+    _walk(rec, "", out)
+    return out
+
+
+def _walk(value: object, path: str, out: "OrderedDict[str, object]") -> None:
+    if isinstance(value, dict):
+        for k, v in value.items():
+            sub = f"{path}.{k}" if path else k
+            _walk(v, sub, out)
+        return
+    if isinstance(value, list):
+        if not value:
+            out[path] = []  # type: ignore[assignment]
+            return
+        if all(isinstance(el, dict) for el in value):
+            # Record the array shape itself.
+            out[path] = value  # whole list for discriminator detection
+            if _is_header_pair_array(value):
+                # Surface each header by name as a synthetic field.
+                for el in value:
+                    pair = el if isinstance(el, dict) else {}
+                    name = pair.get("name") or pair.get("key")
+                    if name is None:
+                        continue
+                    syn_path = f"{path}[name={name}]"
+                    out[syn_path] = pair.get("value")
+            # Then descend into each element to gather inner leaf paths.
+            arr_path = f"{path}[]"
+            for el in value:
+                _walk(el, arr_path, out)
+            return
+        # Primitive array (or mixed). Keep as a single leaf.
+        out[path] = value
+        return
+    # Scalar leaf.
+    out[path] = value
+
+
+# --------------------------------------------------------------------
+# Type inference
+# --------------------------------------------------------------------
+
+
+_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+
+# MAC address (six pairs of hex separated by colons) and bare clock
+# times (``12:34`` / ``12:34:56`` / ``12:34:56.789``) both look hex-and-
+# colons enough to fool a naive IPv6 check. Reject them up front so
+# they fall through to the timestamp / string typing path instead.
+_MAC_RE = re.compile(r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
+_CLOCK_TIME_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?(\.\d+)?$")
+
+# Real IPv6 form. An optional leading hex segment of 1-4 chars,
+# followed by 2-7 ``:[hex?]`` repetitions. Empty segments are allowed
+# so the ``::`` shorthand (and bare ``::``) is captured by the same
+# regex without a separate alternative. The colon-count guard below
+# rejects ``1:2``-style two-segment near-misses.
+_IPV6_RE = re.compile(
+    r"^([0-9a-fA-F]{1,4})?(:[0-9a-fA-F]{0,4}){2,7}$"
+)
+_TIMESTAMP_PATTERNS = [
+    # ISO-8601 with optional fractional and Z/+/-HH:MM offset
+    re.compile(
+        r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
+        r"(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"
+    ),
+    # Common epoch-second / epoch-ms representations are caught by the
+    # integer/float branch.
+]
+
+
+def infer_type(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, list):
+        if value and all(isinstance(el, dict) for el in value):
+            return "object-array"
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return "string"
+        if _IPV4_RE.match(s):
+            # Range-check the octets to avoid mis-tagging "999.999.999.999".
+            octets = s.split(".")
+            if all(0 <= int(o) <= 255 for o in octets):
+                return "ip"
+        if s.count(":") >= 2:
+            # At least two colons rules out two-segment near-misses like
+            # ``1:2`` that the IPv6 alternation would otherwise accept.
+            # MAC and clock-time forms fall through to the timestamp /
+            # string branches instead.
+            if not (_MAC_RE.match(s) or _CLOCK_TIME_RE.match(s)):
+                if _IPV6_RE.match(s):
+                    return "ip"
+        for pat in _TIMESTAMP_PATTERNS:
+            if pat.match(s):
+                return "timestamp"
+        # Numeric-looking strings stay strings -- they are routed through
+        # to_number() at extraction time; type inference reports the
+        # observed wire type.
+        return "string"
+    return "string"
+
+
+# --------------------------------------------------------------------
+# Aggregation across records
+# --------------------------------------------------------------------
+
+
+def aggregate_fields(records: List[dict]) -> "OrderedDict[str, dict]":
+    """Walk every record, accumulate first-seen leaf paths, capture a
+    representative sample value (first non-null), tally type votes, and
+    compute the per-path null/absence rate across the sample.
+
+    ``null_rate`` is per top-level record. For paths inside an object-
+    array, several elements within one record collapse to a single
+    observation, so a 0.5 rate on a nested-array path means the path
+    was absent or null in half the records, not in half the array
+    elements.
+    """
+    total = len(records) or 1
+    agg: "OrderedDict[str, dict]" = OrderedDict()
+
+    for rec in records:
+        flat = flatten_record(rec)
+        for path, value in flat.items():
+            entry = agg.get(path)
+            if entry is None:
+                entry = {
+                    "paths_seen": 0,
+                    "non_null_seen": 0,
+                    "types": [],
+                    "sample": None,
+                    "in_object_array": ("[]" in path) or ("[name=" in path),
+                    "raw_first_value": value,
+                }
+                agg[path] = entry
+            entry["paths_seen"] += 1
+            t = infer_type(value)
+            entry["types"].append(t)
+            if value is not None and t != "null":
+                entry["non_null_seen"] += 1
+                if entry["sample"] is None and not isinstance(value, (list, dict)):
+                    entry["sample"] = value
+
+    finalised: "OrderedDict[str, dict]" = OrderedDict()
+    for path, entry in agg.items():
+        # absence rate = (total_records - times_path_was_seen) / total
+        # null rate at path = (times_seen_with_null) / total
+        present = entry["paths_seen"]
+        present_with_null = entry["paths_seen"] - entry["non_null_seen"]
+        absent = total - present
+        null_rate = (present_with_null + absent) / total
+
+        # Pick the dominant non-null type, else null.
+        type_counts: dict = {}
+        for t in entry["types"]:
+            type_counts[t] = type_counts.get(t, 0) + 1
+        non_null = {k: v for k, v in type_counts.items() if k not in ("null",)}
+        if non_null:
+            chosen_type = max(non_null.items(), key=lambda kv: kv[1])[0]
+        else:
+            chosen_type = "null"
+
+        leaf = _leaf_name(path)
+        finalised[path] = {
+            "path": path,
+            "leaf": leaf,
+            "type": chosen_type,
+            "sample": entry["sample"],
+            "null_rate": round(null_rate, 3),
+            "in_object_array": entry["in_object_array"],
+        }
+    return finalised
+
+
+def _leaf_name(path: str) -> str:
+    """Return the last dot-separated segment, stripped of array / pair
+    markers (``transactions[].http.method`` -> ``method``;
+    ``http.headers[name=User-Agent]`` -> ``User-Agent``)."""
+    # Strip array markers from the tail.
+    if path.endswith("[]"):
+        path = path[:-2]
+    # ``[name=X]`` suffix -> use X
+    m = re.search(r"\[name=([^\]]+)\]$", path)
+    if m:
+        return m.group(1)
+    tail = path.split(".")[-1]
+    tail = re.sub(r"\[\]$", "", tail)
+    return tail
+
+
+# --------------------------------------------------------------------
+# Object-array discriminator detection
+# --------------------------------------------------------------------
+
+
+def find_object_arrays(records: List[dict]) -> List[dict]:
+    """Identify every object-array path, and within each, flag low-
+    cardinality keys whose values neatly partition the array elements
+    (likely discriminators -- ``phase``, ``role``, ``type``, etc.)."""
+    out: List[dict] = []
+    array_paths: "OrderedDict[str, list]" = OrderedDict()
+
+    for rec in records:
+        _collect_object_arrays(rec, "", array_paths)
+
+    for path, elements in array_paths.items():
+        if not elements:
+            continue
+        # Tally values per key across all element dicts.
+        per_key: dict = {}
+        per_key_count: dict = {}
+        for el in elements:
+            if not isinstance(el, dict):
+                continue
+            for k, v in el.items():
+                # Discriminators are scalar string or integer values.
+                # ``bool`` is a subclass of ``int`` in Python and a binary
+                # flag is not a useful discriminator, so it is excluded
+                # explicitly. Integer values (HTTP status code, severity
+                # level, etc.) are coerced to ``str`` so the existing
+                # ``values: List[str]`` contract holds end-to-end.
+                if isinstance(v, (str, int)) and not isinstance(v, bool):
+                    per_key.setdefault(k, []).append(str(v))
+                    per_key_count[k] = per_key_count.get(k, 0) + 1
+
+        discriminator = None
+        values: List[str] = []
+        for k, vals in per_key.items():
+            unique = sorted(set(vals))
+            present_count = per_key_count.get(k, 0)
+            # Low cardinality + present on most elements + at least two
+            # distinct values is the signal.
+            if 2 <= len(unique) <= 5 and present_count >= max(2, len(elements) // 2):
+                # Prefer keys named like classic discriminators.
+                if k.lower() in ("phase", "role", "type", "kind", "action", "direction"):
+                    discriminator = k
+                    values = unique
+                    break
+                if discriminator is None:
+                    discriminator = k
+                    values = unique
+
+        out.append(
+            {
+                "path": f"{path}[]",
+                "element_count": len(elements),
+                "discriminator": discriminator,
+                "values": values,
+            }
+        )
+    return out
+
+
+def _collect_object_arrays(
+    value: object, path: str, out: "OrderedDict[str, list]"
+) -> None:
+    if isinstance(value, dict):
+        for k, v in value.items():
+            sub = f"{path}.{k}" if path else k
+            _collect_object_arrays(v, sub, out)
+        return
+    if isinstance(value, list):
+        if value and all(isinstance(el, dict) for el in value):
+            out.setdefault(path, []).extend(value)
+            arr_path = f"{path}[]"
+            for el in value:
+                _collect_object_arrays(el, arr_path, out)
+
+
+# --------------------------------------------------------------------
+# XDM candidate attachment
+# --------------------------------------------------------------------
+
+
+def attach_xdm_candidates(
+    fields: "OrderedDict[str, dict]", reverse_index: dict, limit: int = 3
+) -> None:
+    """Look each field's leaf name up in the reverse anchor index. If
+    the leaf misses, try a parent-qualified variant (e.g.
+    ``http.method`` -> ``http_method``)."""
+    for path, field in fields.items():
+        leaf = field["leaf"]
+        candidates = _lookup(reverse_index, leaf, limit)
+        if not candidates:
+            parent_qual = _parent_qualified(path)
+            if parent_qual and parent_qual != leaf:
+                candidates = _lookup(reverse_index, parent_qual, limit)
+        field["xdm_candidates"] = candidates
+
+
+def _lookup(reverse_index: dict, name: str, limit: int) -> List[dict]:
+    key = normalise_synonym(name)
+    if not key:
+        return []
+    raw = reverse_index.get(key, [])
+    # Compact each candidate to the fields the worksheet documents.
+    return [
+        {
+            "xdm_path": c["xdm_path"],
+            "frequency": c["frequency"],
+            "score": c["score"],
+        }
+        for c in raw[:limit]
+    ]
+
+
+def _parent_qualified(path: str) -> str:
+    """Build a parent-qualified candidate name from a dotted path.
+
+    ``transactions[].http.method`` -> ``http_method``
+    ``session.user_id``           -> ``user_id``
+    ``foo.bar.baz``               -> ``bar_baz``
+    """
+    bare = path.replace("[]", "")
+    # Strip ``[name=X]`` segments entirely.
+    bare = re.sub(r"\[name=[^\]]+\]", "", bare)
+    parts = [p for p in bare.split(".") if p]
+    if len(parts) < 2:
+        return ""
+    return f"{parts[-2]}_{parts[-1]}"
+
+
+# --------------------------------------------------------------------
+# Top-level profile builder
+# --------------------------------------------------------------------
+
+
+def profile(source_path: str, text: str) -> dict:
+    fmt = detect_format(text)
+    try:
+        records = parse_records(text, fmt)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"could not parse {source_path} as {fmt}: {exc}") from exc
+
+    fields = aggregate_fields(records)
+    arrays = find_object_arrays(records)
+    reverse_index = build_reverse_index(load_anchors())
+    attach_xdm_candidates(fields, reverse_index)
+
+    return {
+        "source": source_path,
+        "detected_format": fmt,
+        "record_count": len(records),
+        "fields": list(fields.values()),
+        "object_arrays": arrays,
+    }
+
+
+# --------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------
+
+
+def _format_text(worksheet: dict) -> str:
+    lines = [
+        f"source:          {worksheet['source']}",
+        f"detected_format: {worksheet['detected_format']}",
+        f"record_count:    {worksheet['record_count']}",
+        "",
+        "fields:",
+    ]
+    for f in worksheet["fields"]:
+        cand = f.get("xdm_candidates") or []
+        cand_str = (
+            ", ".join(c["xdm_path"] for c in cand[:2]) if cand else "(no candidate)"
+        )
+        sample = f.get("sample")
+        if isinstance(sample, str) and len(sample) > 40:
+            sample = sample[:37] + "..."
+        lines.append(
+            f"  {f['path']:<48} {f['type']:<14} "
+            f"null={f['null_rate']:<5} -> {cand_str}  sample={sample!r}"
+        )
+    if worksheet["object_arrays"]:
+        lines.append("")
+        lines.append("object_arrays:")
+        for oa in worksheet["object_arrays"]:
+            disc = (
+                f"discriminator={oa['discriminator']} values={oa['values']}"
+                if oa["discriminator"]
+                else "no discriminator"
+            )
+            lines.append(f"  {oa['path']:<32} elements={oa['element_count']} {disc}")
+    return "\n".join(lines)
+
+
+class _ArgvErrorParser(argparse.ArgumentParser):
+    """Make argparse exit with status 1 on argument errors, matching
+    the script's documented exit-code contract (1 = argument error,
+    2 = I/O / parse failure on the sample file)."""
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        sys.stderr.write(f"{self.prog}: error: {message}\n")
+        sys.exit(1)
+
+
+def main(argv: List[str]) -> int:
+    ap = _ArgvErrorParser(
+        prog="profile_log.py",
+        description="Static profiler for raw vendor log samples. "
+        "Emits a JSON worksheet describing format, fields, types, "
+        "null rates, object-array discriminators, and ranked XDM "
+        "candidate suggestions.",
+    )
+    ap.add_argument("sample", help="path to a raw log sample file")
+    ap.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="output format (default: json)",
+    )
+    args = ap.parse_args(argv[1:])
+
+    path = Path(args.sample)
+    if not path.is_file():
+        sys.stderr.write(f"error: {path} not found or not a file\n")
+        return 2
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(f"error: cannot read {path}: {exc}\n")
+        return 2
+
+    try:
+        worksheet = profile(str(path), text)
+    except ValueError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
+    if args.format == "json":
+        sys.stdout.write(json.dumps(worksheet, indent=2, default=_json_default) + "\n")
+    else:
+        sys.stdout.write(_format_text(worksheet) + "\n")
+    return 0
+
+
+def _json_default(obj: object) -> object:
+    # Object arrays carry the raw list-of-dicts so discriminator
+    # detection can read it; the JSON serialiser handles those
+    # natively. Anything else unexpected becomes a string.
+    return str(obj)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

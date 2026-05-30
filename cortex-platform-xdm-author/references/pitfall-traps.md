@@ -1,0 +1,152 @@
+<!--
+SPDX-FileCopyrightText: GoCortexIO
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+# Pitfall traps -- what NOT to do
+
+Scan this list before emitting any rule. Most of these are caught by `scripts/lint_rule.py`, but a few (notably non-existent XDM paths and the OMIT-and-fall-back rule for XDM_CONST) need human-style judgement.
+
+## Quick-reference pitfalls
+
+| Pitfall | Wrong | Right |
+| --- | --- | --- |
+| Unused temp field | `_unused = something` (never assigned to XDM) | Remove it or map it to an XDM field |
+| String vs number | `severityNumber = "4"` | `severityNumber = 4` |
+| Quoted XDM_CONST | `"XDM_CONST.OUTCOME_SUCCESS"` | `XDM_CONST.OUTCOME_SUCCESS` |
+| Quoted dataset name (MODEL) | `dataset="name_raw"` | `dataset=name_raw` |
+| Self-referencing XDM field | `xdm.target.ipv4 = coalesce(xdm.target.ipv4, _fallback)` | `xdm.target.ipv4 = _fallback` |
+| Chained arrow operator | `imperva -> ids -> site_name` | `json_extract_scalar(to_string(imperva), "$.ids.site_name")` |
+| Missing `to_string()` wrap | `split(arrayindex(_parts, 3), "/")` | `split(to_string(arrayindex(_parts, 3)), "/")` |
+| Array field without `arraycreate` | `xdm.email.recipients = _recipient` | `xdm.email.recipients = if(_recipient != null, arraycreate(_recipient), null)` |
+| Leading pipe on first stage | `[MODEL: ...]\n\| alter` | `[MODEL: ...]\nalter` (or `filter`) |
+| Missing terminal semicolon | `... = "Foo"` (end of rule) | `... = "Foo";` |
+| `from_epoch` (does not exist) | `from_epoch(_ts, "MILLIS")` | `parse_epoch(_ts, "MILLIS")` |
+| Trailing comma before `;` | `... = "Foo",;` | `... = "Foo";` |
+| Unguarded `parse_epoch` | `_time = parse_epoch(_ts, "MILLIS")` | `_time = if(_ts != null and _ts != "", parse_epoch(_ts, "MILLIS"), null)` |
+| `_time` assignment in MODEL rule | `_time = parse_epoch(...)` in MODEL | Remove it. `_time` is set during INGEST or by Cortex automatically. |
+| JSON path with `@` prefix | `json_extract_scalar(_raw_log, "$.@timestamp")` | `json_extract_scalar(_raw_log, "$['@timestamp']")` |
+
+Unused intermediaries are BLOCKING (not warnings). Every non-underscore field extracted in an `alter` block MUST be referenced in a subsequent `xdm.*` assignment (directly or transitively). "Data Model Rules contains unused fields" is a hard block on both `_raw` and `_gc_raw` datasets.
+
+## Non-existent XDM paths
+
+These look plausible but are NOT in the schema. They cause validation errors or IDE internal errors.
+
+| Wrong | Right |
+| --- | --- |
+| `xdm.source.user.email` | `xdm.source.user.upn` (use for email addresses) |
+| `xdm.target.user.email` | `xdm.target.user.upn` |
+| `xdm.network.http.user_agent` | `xdm.source.user_agent` (top-level source field) |
+| `xdm.cloud.provider` | `xdm.source.cloud.provider` (or `xdm.target.cloud.provider`) |
+| `xdm.source.cloud.account_id` | `xdm.source.cloud.project_id` (cloud account identifiers) |
+| `xdm.source.process.parent_process.*` | `xdm.source.process.parent_id` (only `parent_id` exists for the parent chain) |
+| `xdm.event.start_time` | Fold into `xdm.event.duration` via `to_integer(subtract(...))` |
+| `xdm.event.end_time` | Fold into `xdm.event.duration` |
+| `xdm.network.direction` | Include direction in `xdm.event.description` or `xdm.event.operation_sub_type` |
+
+For each mapping in your draft rule, verify the XDM path exists in [xdm-schema.md](xdm-schema.md) before emitting.
+
+## Commonly confused field pairs
+
+### `xdm.target.resource.name` vs `xdm.target.application.name`
+
+- `xdm.target.resource.name` -- cloud resource name (S3 bucket, VM name).
+- `xdm.target.application.name` -- software application name (`"Nginx"`, `"MSSQL"`).
+
+Choose based on what the log field represents. Do not use one for the other.
+
+### `xdm.event.outcome_reason` vs `xdm.observer.action`
+
+Both are valid for raw action strings.
+
+- `xdm.observer.action` -- companion to `xdm.event.outcome` (see [transformation-patterns.md](transformation-patterns.md) "Companion field pairs").
+- `xdm.event.outcome_reason` -- explanatory text.
+
+### `xdm.network.http.browser` vs `xdm.source.user_agent`
+
+- `xdm.network.http.browser` -- browser NAME from the User-Agent header (`"Chrome"`, `"Firefox"`).
+- `xdm.source.user_agent` -- full User-Agent string or declared client value.
+
+Do NOT assign a detection classification label (`"Bot"`, `"Crawler"`, `"Automated"`) to `xdm.network.http.browser`. If the log has both a declared client (User-Agent) and a classified client (detection result), map the declared client to `browser` or `user_agent`, and include the classification in `xdm.event.description`.
+
+## XDM_CONST fallback rules
+
+General rule: whenever the vendor value does not match any constant listed in [xdm-const.md](xdm-const.md), OMIT the XDM_CONST field entirely and place the raw vendor text in the String fallback below. Never invent a constant by appending a plausible suffix.
+
+### `xdm.alert.category` -> `xdm.alert.subcategory` (String)
+
+If the vendor category string does not map to a known `XDM_CONST.THREAT_CATEGORY_*`, OMIT `xdm.alert.category` and use `xdm.alert.subcategory` (String) for the raw vendor category text instead.
+
+### `xdm.{source,target,intermediate}.cloud.service` -> `*.cloud.source_type` (String)
+
+Requires `XDM_CONST.CLOUD_SERVICE_TYPE_*`. If the vendor service name does not map, OMIT the XDM_CONST field and use the parallel `xdm.{source,target,intermediate}.cloud.source_type` (String) for the raw service name.
+
+### `xdm.alert.mitre_techniques`
+
+Requires `XDM_CONST.MITRE_TECHNIQUE_*`. Only map when the vendor provides explicit MITRE labels (e.g. `risk_reason`, `attack_type`, `technique_id`). Vendor-specific attack descriptions (`"SQL Injection via UNION SELECT"`) are NOT MITRE labels -- use `xdm.alert.subcategory` or `xdm.event.description` for those.
+
+### Groups with no enumerated constants
+
+For the following groups, treat with OMIT-and-fall-back:
+
+| Field | Fallback |
+| --- | --- |
+| `xdm.{source,target,intermediate}.agent.type` | OMIT; place raw type in `xdm.event.description` if useful |
+| `xdm.{source,target}.user.user_type` | OMIT; `username` and `identity_type` already convey the signal |
+| `xdm.{source,target}.user.scope` | OMIT; place scope literal in `xdm.event.description` if useful |
+| `xdm.source.process.executable.signature_status` (and all peer `.signature_status`) | OMIT; vendors rarely match the closed set |
+| `xdm.event.tags` (`EVENT_TAG` Array) | OMIT unless vendor explicitly produces tags such as AUTHENTICATION/CLOUD/NETWORK/ONPREM/SAAS/VPN; never invent tags |
+| `xdm.network.dns.dns_question.type` / `xdm.network.dns.dns_resource_record.type` | OMIT; place raw record type in `xdm.event.description` |
+| `xdm.network.dns.response_code` | OMIT; place raw code in `xdm.network.dns.response_code_text` if available, else `xdm.event.description` |
+| `xdm.network.http.url_category` | OMIT; place raw category in `xdm.event.description` (NEVER guess `URL_CATEGORY_*`) |
+| `xdm.network.ldap.{bind_auth_type,operation,scope}` | OMIT; place raw value in `xdm.event.description` |
+| `xdm.network.dcerpc.operation` | OMIT; raw operation name in `xdm.event.description` |
+| `xdm.network.dhcp.message_type` | OMIT; raw message type in `xdm.event.description` |
+| `xdm.target.registry{,_before}.value_type` | OMIT; raw value type in `xdm.event.description` |
+| `xdm.database.operation` | OMIT; raw SQL verb in `xdm.target.application.name` or `xdm.event.description` |
+
+Do NOT invent constants for any of the above. The Cortex IDE rejects unknown `XDM_CONST` values with a hard validation error, and a hallucinated constant typically passes a local-LLM self-check while failing the server-side compile.
+
+## Unused temp variable rule
+
+Every underscore-prefixed variable you extract MUST appear on the RHS of an XDM field assignment. If you extract `_cloud_service` but cannot find a valid XDM_CONST for `xdm.source.cloud.service`, either:
+
+1. Map it to the String fallback field (e.g. `xdm.source.cloud.source_type`).
+2. Remove the extraction entirely.
+
+Never leave orphaned temp variables -- they cause a blocking validation error.
+
+## No no-op leading filter stages
+
+Data model rules run inside a MODEL block. A `filter` stage as the FIRST stage is forbidden when the predicate is universally true (a no-op). The Cortex IDE rejects the rule with a parser error.
+
+### Common forbidden patterns
+
+```
+// WRONG -- no-op leading filter
+filter _raw_log != null
+| alter _foo = json_extract_scalar(_raw_log, "$.foo")
+| alter xdm.event.id = _foo
+
+// WRONG -- always-true tautology
+filter true
+| alter ...
+
+// WRONG -- filter re-asserts the dataset selection already implicit in MODEL
+filter _vendor = "<vendor>" and _product = "<product>"
+| alter ...
+```
+
+### Correct
+
+```
+alter _foo = json_extract_scalar(_raw_log, "$.foo")
+| alter xdm.event.id = _foo
+```
+
+RULE: The first stage of the rule MUST be `alter`. Do NOT prefix the rule with a `filter` stage of any kind, even when the intent is "skip null logs" -- nulls are handled per-extraction with `coalesce` / `if` and per-field with null guards.
+
+A legitimate `filter` stage may appear LATER in the pipeline only when it expresses a non-trivial conditional projection (e.g. dropping audit subtypes that should not be modelled). It must never be the first stage and must never have a predicate that is always true.
+
+This applies to ALL data sources -- no vendor for which a no-op leading filter is valid.
