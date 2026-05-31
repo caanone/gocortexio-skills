@@ -7,6 +7,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 A GoCortexIO skill bundle. Authors Palo Alto Networks Cortex XSIAM Data Model Rules in Cortex Query Language (XQL) from raw vendor log samples.
 
+## Response use of AI
+This project provides AI Skills to enhance and extend your AI workflows. However, **the availability of these skills is not an encouragement, endorsement, or guarantee of safety for uploading confidential, proprietary, or sensitive data into third-party AI platforms.**
+
+This projects skills merely format or route data; the ultimate data security and compliance depend entirely on the underlying AI model or platform you choose to connect them to. In line with the Australian Signals Directorate (ASD) guidelines on [Data leaks and privacy breaches](https://www.cyber.gov.au/business-government/secure-design/artificial-intelligence/artificial-intelligence-for-small-business#data-leaks-and-privacy-breaches), uploading un-anonymised corporate or personal data into public generative AI systems risks exposing private information, as external providers may retain and reuse your inputs.
+
+Before deploying or experimenting with these skills in a professional setting, you must:
+
+* Perform Internal Security Checks: Consult your organisation's IT security, InfoSec, or legal compliance teams to ensure the use of these tools aligns with your internal AI acceptable use frameworks.
+* Verify Corporate AI Policies: Ensure your choice of third-party AI provider has been officially vetted and approved by your company or organisation for handling organisational data.
+* Validate the AI Backend: Confirm that your underlying AI environment contractually guarantees data isolation and access control as outlined in the ASD's [AI Data Security Best Practices](https://www.cyber.gov.au/business-government/secure-design/artificial-intelligence/ai-data-security#best-practices-to-secure-data-for-ai-based-systems).
+
+**Never feed data into a third-party AI system that has not been internally approved by your organisation or that you would not want publicly disclosed.**
+
 ## What is in this bundle
 
 - `SKILL.md` -- entry point for a host that supports the on-disk skill convention. Describes scope, inputs, outputs, the authoring workflow, and the hard rules.

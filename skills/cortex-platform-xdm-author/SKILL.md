@@ -1,6 +1,6 @@
 ---
 name: cortex-platform-xdm-author
-description: Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL). Turns a raw vendor log sample into a production-ready \[MODEL: dataset=..._raw\] rule with a MAPPED-header comment block. Use when the request involves writing an XDM / XSIAM data model rule, fixing a failing one, or adding a vendor to a rule pack.
+description: Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL). Turns a raw vendor log sample into a production-ready rule with a MAPPED-header comment block.
 ---
 
 # cortex-platform-xdm-author
