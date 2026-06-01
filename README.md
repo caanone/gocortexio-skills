@@ -9,9 +9,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # GoCortexIO Skills
 
-Portable skill bundles for doing cool still with the Palo Alto Networks Cortex Platform. Each subdirectory is one self-contained bundle: a SKILL.md entry point, on-demand `references/` markdown, optional `scripts/` and `assets/`, and an AGPL-3.0-or-later licence file. Bundles follow the on-disk skill convention: a `SKILL.md` at the bundle root plus optional `references/`, `scripts/`, and `assets/` siblings. Any host that loads skills from this layout can use them. Nothing in a bundle is tied to a particular runner or model.
+Portable skill bundles for doing cool stuff with the Palo Alto Networks Cortex Platform. Each subdirectory is one self-contained bundle: a SKILL.md entry point, on-demand `references/` markdown, optional `scripts/` and `assets/`, and an AGPL-3.0-or-later licence file. Bundles follow the on-disk skill convention: a `SKILL.md` at the bundle root plus optional `references/`, `scripts/`, and `assets/` siblings. Any host that loads skills from this layout can use them. Nothing in a bundle is tied to a particular runner or model.
 
-## Response use of AI
+## Responsible use of AI
 This project provides AI Skills to enhance and extend your AI workflows. However, **the availability of these skills is not an encouragement, endorsement, or guarantee of safety for uploading confidential, proprietary, or sensitive data into third-party AI platforms.**
 
 This projects skills merely format or route data; the ultimate data security and compliance depend entirely on the underlying AI model or platform you choose to connect them to. In line with the Australian Signals Directorate (ASD) guidelines on [Data leaks and privacy breaches](https://www.cyber.gov.au/business-government/secure-design/artificial-intelligence/artificial-intelligence-for-small-business#data-leaks-and-privacy-breaches), uploading un-anonymised corporate or personal data into public generative AI systems risks exposing private information, as external providers may retain and reuse your inputs.
