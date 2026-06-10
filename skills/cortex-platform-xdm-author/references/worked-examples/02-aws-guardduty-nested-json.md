@@ -168,7 +168,6 @@ alter
 
     // Service action type -- 8-value closed vocabulary
     service_action_type = coalesce(
-        _action_type,
         finding_service -> Action.ActionType, finding_service -> action.actionType,
         if(coalesce(Type, type) ~= "^AttackSequence", "AttackSequence"),
         if(coalesce(finding_service -> FeatureName, finding_service -> featureName) ~= "(?i)Malware", "MalwareProtection")),

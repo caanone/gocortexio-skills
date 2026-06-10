@@ -47,6 +47,8 @@ ALLOW_KNOWN_BAD_XDM_PATHS = {
     # Pitfall trap examples -- invented paths used to demonstrate
     # ERR-011 (self-reference) and related anti-patterns.
     "xdm.x": "pitfall-traps.md anti-pattern placeholder",
+    # SKILL.md / script-usage placeholder, e.g. "--reverse <xdm.path>".
+    "xdm.path": "placeholder token in script CLI usage docs, not a real path",
     # pitfall-traps.md "Wrong | Right" table -- left-column wrong paths.
     "xdm.cloud.provider": "pitfall-traps Wrong column (right is xdm.source.cloud.provider)",
     "xdm.network.http.user_agent": "pitfall-traps Wrong column (right is xdm.source.user_agent)",

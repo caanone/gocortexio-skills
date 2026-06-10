@@ -10,7 +10,9 @@ Public surface:
     ANCHORS_PATH         absolute path to the shipped JSON
     normalise_synonym    str -> str
     load_anchors         () -> dict (exits 2 on failure)
-    build_reverse_index  dict -> dict
+    build_reverse_index  dict -> dict   (synonym -> ranked xdm.* candidates)
+    forward_synonyms     (dict, xdm_path) -> ranked vendor synonyms
+    related_fields       (xdm_path) -> companion / mirror partners
 
 Python 3.9+ stdlib only.
 """
@@ -33,11 +35,12 @@ _TRAILING_UNDERSCORE_RE = re.compile(r"_+$")
 
 
 def normalise_synonym(raw: object) -> str:
-    """Mirror of ``normaliseSynonym()`` in the upstream extractor that
-    derives the field-anchor table. Lower-case, strip leading ``@``,
-    collapse punctuation to underscore, strip leading underscore,
-    strip a leading ``tmp_`` prefix, then collapse and trim trailing
-    underscores.
+    """Normalise a vendor field name to its canonical anchor key. Lower-
+    case, strip a leading ``@``, collapse punctuation to underscore,
+    strip a leading underscore, strip a leading ``tmp_`` prefix, then
+    collapse and trim trailing underscores. The field-anchor index is
+    keyed by this normalised form, so the same transform must run on
+    every lookup input.
     """
     s = "" if raw is None else str(raw)
     s = s.strip().lower()
@@ -68,6 +71,62 @@ def load_anchors() -> dict:
     except json.JSONDecodeError as exc:
         sys.stderr.write(f"error: failed to parse {ANCHORS_PATH}: {exc}\n")
         sys.exit(2)
+
+
+def forward_synonyms(data: dict, xdm_path: str) -> list:
+    """Vendor synonyms historically mapped to ``xdm_path``, ranked by
+    descending per-synonym count. Drives the ``--reverse`` lookup: given
+    an XDM target, what raw column names tend to fill it."""
+    entry = (data.get("anchors") or {}).get(xdm_path)
+    if not entry:
+        return []
+    syns = sorted(
+        (entry.get("synonyms") or []),
+        key=lambda s: s.get("count", 0),
+        reverse=True,
+    )
+    return [
+        {"synonym": s.get("synonym"), "count": s.get("count", 0)}
+        for s in syns
+        if s.get("synonym")
+    ]
+
+
+# Companion / mirror field groups (transformation-patterns.md). Every
+# member of a group lists the others as related: when you map one, the
+# others are usually mapped together. Expanded into a symmetric lookup
+# below.
+_RELATED_GROUPS = [
+    ["xdm.source.ipv4", "xdm.target.ipv4"],
+    ["xdm.source.ipv4", "xdm.source.host.ipv4_addresses"],
+    ["xdm.target.ipv4", "xdm.target.host.ipv4_addresses"],
+    ["xdm.source.host.ipv4_addresses", "xdm.target.host.ipv4_addresses"],
+    ["xdm.source.user.username", "xdm.source.user.upn"],
+    ["xdm.target.user.username", "xdm.target.user.upn"],
+    ["xdm.source.user.username", "xdm.target.user.username"],
+    ["xdm.source.user.username", "xdm.source.user.identifier"],
+    ["xdm.source.host.hostname", "xdm.source.host.fqdn"],
+    ["xdm.target.host.hostname", "xdm.target.host.fqdn"],
+    ["xdm.source.host.hostname", "xdm.target.host.hostname"],
+    ["xdm.event.outcome", "xdm.observer.action"],
+    ["xdm.event.log_level", "xdm.alert.severity"],
+    ["xdm.event.type", "xdm.event.original_event_type"],
+    ["xdm.alert.name", "xdm.alert.original_threat_name"],
+    ["xdm.event.id", "xdm.alert.original_alert_id"],
+    ["xdm.alert.category", "xdm.alert.subcategory"],
+    ["xdm.alert.mitre_tactics", "xdm.alert.mitre_techniques"],
+    ["xdm.source.is_internal_ip", "xdm.target.is_internal_ip"],
+]
+
+
+def related_fields(xdm_path: str) -> list:
+    """Companion / mirror fields for ``xdm_path``: the partners you
+    normally map alongside it. Deterministic, deduplicated, sorted."""
+    out: set = set()
+    for group in _RELATED_GROUPS:
+        if xdm_path in group:
+            out.update(g for g in group if g != xdm_path)
+    return sorted(out)
 
 
 def build_reverse_index(data: dict) -> dict:

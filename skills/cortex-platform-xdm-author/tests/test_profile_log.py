@@ -325,5 +325,37 @@ class TestIpv6FalsePositives(unittest.TestCase):
         self.assertEqual(fields["network.client.ip"]["type"], "ip")
 
 
+class TestPatternRecommendation(unittest.TestCase):
+    """The worksheet recommends an extraction pattern from the detected
+    format and object-array shape."""
+
+    def test_json_recommends_a_and_flags_d_prime(self) -> None:
+        ws = _profile_fixture("acmeshield_waf.log")
+        rec = ws["recommended_pattern"]
+        self.assertEqual(rec["primary"], "A")
+        # The object-arrays with discriminators surface a Pattern D' note.
+        joined = " ".join(rec["also"])
+        self.assertIn("Pattern D'", joined)
+        self.assertIn("transactions[]", joined)
+
+    def test_cef_recommends_b(self) -> None:
+        ws = _profile_fixture("sample.cef")
+        self.assertEqual(ws["recommended_pattern"]["primary"], "B")
+
+    def test_kv_recommends_a(self) -> None:
+        ws = _profile_fixture("sample.kv")
+        self.assertEqual(ws["recommended_pattern"]["primary"], "A")
+
+    def test_recommendation_in_text_output(self) -> None:
+        cp = subprocess.run(
+            [sys.executable, str(PROFILE_SCRIPT),
+             str(FIXTURES / "sample.cef"), "--format", "text"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertIn("pattern:", cp.stdout)
+        self.assertIn("B --", cp.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

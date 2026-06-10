@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 Five production-derived walkthroughs, one per extraction pattern. Each takes a synthesised raw log sample and walks through to a complete, validated `[MODEL: dataset=..._raw]` rule. Load only the walkthrough whose pattern matches the log in front of you.
 
-The final XQL in each walkthrough is the actual `datamodel.xql` from the corresponding pack in the GoCortex XQL IDE pack corpus, reproduced verbatim. The vendor name in each header is real because the rules target real log formats; you would use the same `xdm.observer.vendor` string when authoring against those products. The raw log samples are synthesised with fake addresses (`acme.local`, `10.0.0.1`, `alice@example.com`) so no real customer data is reproduced.
+The final XQL in each walkthrough is a complete, validated rule reproduced verbatim. The vendor name in each header is real because the rules target real log formats; you would use the same `xdm.observer.vendor` string when authoring against those products. The raw log samples are synthesised with fake addresses (`acme.local`, `10.0.0.1`, `alice@example.com`) so no real customer data is reproduced.
 
 ## Walkthroughs
 

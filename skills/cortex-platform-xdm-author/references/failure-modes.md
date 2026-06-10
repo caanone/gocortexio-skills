@@ -110,6 +110,18 @@ Cortex parser errors cascade. The second and later violations are usually downst
 
 Recovery: fix the EARLIEST reported violation only, re-run the linter, then assess. Most cascades resolve on the first fix. Repeat. Do not regenerate the whole rule.
 
+## 10. Anchor-lookup miss read as "no XDM field"
+
+`lookup_anchor.py <field>` returns zero candidates and you write something like:
+
+```
+mfa_method -- no xdm.auth.mfa.* path exists; folded into description
+```
+
+The anchor index is a PRECEDENT table -- it records what past rules happened to map, nothing more. A zero result means no precedent, not no field. The schema is [xdm-schema.md](xdm-schema.md), and it is much wider than the index. `mfa_method` is the canonical example: the lookup historically returned zero candidates, yet `xdm.auth.mfa.method` sits in the schema -- the false "no path exists" claim buried a queryable value in the description.
+
+Recovery: before declaring a field unmapped, grep [xdm-schema.md](xdm-schema.md) for the concept (`auth`, `mfa`, `host`, `process`, `registry`, ...). Map to the schema field directly when one exists, even with zero anchor precedent. Only write NOT MAPPED when the schema genuinely has no field for the concept.
+
 ## Quick scan -- what each symptom tells you
 
 | Symptom in your draft | Failure mode | Action |
@@ -123,3 +135,4 @@ Recovery: fix the EARLIEST reported violation only, re-run the linter, then asse
 | `xdm.alert.severity = <numeric>` | #7 raw score | Apply banded scoring |
 | Long pre-flight prose, no `[MODEL:` yet | #8 rumination | Start writing the rule |
 | Discarding the draft after linter output | #9 re-drafting | Fix earliest violation only |
+| "no xdm.* path exists" after a zero anchor result | #10 anchor miss | Grep xdm-schema.md for the concept first |

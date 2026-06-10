@@ -3,13 +3,17 @@
 # SPDX-FileCopyrightText: GoCortexIO
 """lint_rule.py <rule.xql>
 
-Standalone syntactic linter for Cortex XSIAM XQL Data Model Rules.
-Emits a JSON list of violations on stdout, ordered by source line.
+Standalone linter for Cortex XSIAM XQL Data Model Rules. Emits a JSON
+list of violations on stdout, ordered by source line. Reads the XDM
+schema and XDM_CONST closed lists from the bundle's own references
+(via _xdm_schema), and runs a dataflow pass over the rule, so it
+performs the schema and dataflow checks offline with no external state.
 
-Covers the parser-conformance rules whose detection is purely
-syntactic (no XDM schema, no dataflow inference, no live tenant
-state):
+Structural and parser-conformance checks:
 
+    ERR-009  Missing terminal semicolon.
+    ERR-010  Trailing comma before the terminal semicolon.
+    ERR-011  Self-referencing xdm.* field (reads itself on its own RHS).
     ERR-012  Infix arithmetic in alter (use add / subtract / multiply / divide).
     ERR-013  Compound null guard inside if() predicate (X != null and/or Y != null).
     ERR-014  Bareword true / false equality on a string-typed column.
@@ -19,16 +23,32 @@ state):
     ERR-018  Array function called on a known JSON-string column without the '-> []' cast.
     ERR-024  Sibling reference inside a single alter stage.
     ERR-027  MODEL reads a parser-stamped or undefined underscore field instead of deriving it from raw columns.
+    WARN-015 Quoted dataset name in the MODEL header.
+    WARN-017 Leading pipe on the first stage after the MODEL header.
+    WARN-018 _time assigned in a MODEL rule.
     INFO-012 Cascade root-cause hint when two parser-conformance violations land adjacent.
 
-Out of scope (covered by the upstream IDE engine, which has the full
-XDM schema, XDM_CONST closed-list, and dataflow inference):
+Schema-aware checks (XDM schema + XDM_CONST loaded from references):
 
-    WARN-020 / WARN-030 / WARN-035  XDM array-vs-scalar type checks.
-    ERR-025  Orphan temp hidden inside concat() / arraystring().
-    INFO-006 fields - cleanup. Underscore temps are dropped by the dataset model
-             layer at query time, so an explicit cleanup stage is not idiomatic.
-             See references/extraction-patterns.md "A note on intermediate variables".
+    ERR-020  Invented xdm.* assignment target (not a real leaf field).
+    WARN-014 Quoted XDM_CONST value (dropped as a string literal).
+    WARN-035 Array-typed XDM field assigned a scalar value.
+    WARN-037 Log-level word (warning / error / notice / debug) echoed into
+             xdm.alert.severity instead of a proper band.
+
+Dataflow checks (reach + array-typing over the rule's temps):
+
+    ERR-019  Underscore temp never reaches an xdm.* assignment (_gc_raw).
+    ERR-025  Temp whose only consumer is inside a concat() / arraystring() body (_gc_raw).
+
+ERR-019 and ERR-025 are a hard block only on _gc_raw datasets; on plain
+_raw datasets Cortex tolerates the same shapes, so the linter scopes
+them to _gc_raw.
+
+INFO-006 (fields - cleanup) is deliberately NOT emitted: underscore
+temps are dropped by the dataset model layer at query time, so an
+explicit cleanup stage is not idiomatic in a MODEL rule. See
+references/extraction-patterns.md "A note on intermediate variables".
 
 Python 3.9+ stdlib only.
 
@@ -46,6 +66,17 @@ import re
 import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple
+
+# Sibling shared loader. The bundle ships scripts/ as a flat directory; this
+# insert lets lint_rule.py import _xdm_schema whether run as a script or
+# imported by the test suite via importlib.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _xdm_schema import (  # noqa: E402
+    load_xdm_paths,
+    xdm_path_exists,
+    xdm_path_is_array,
+)
 
 
 # --------------------------------------------------------------------
@@ -151,6 +182,253 @@ def _classify_stages(code_lines: List[str]) -> Tuple[List[str], List[int]]:
             elif ch == ")":
                 depth = max(0, depth - 1)
     return stage_of, start_idx
+
+
+# --------------------------------------------------------------------
+# Dataflow analyser
+#
+# Port of the engine's analyseDataflow: collects every `name =` def
+# inside alter stages (paren-depth 0), computes each def's multi-line
+# RHS window, then derives two sets:
+#   reachable   -- defs that flow into an xdm.* assignment, directly or
+#                  transitively through other reachable defs' RHS.
+#   array_typed -- defs whose RHS produces an array, propagated through
+#                  bare-reference chains.
+# ERR-019 (unused temp) and the array-vs-scalar warnings consume these.
+# --------------------------------------------------------------------
+
+
+_ARRAY_PRODUCING_FNS = {
+    "arraycreate", "arrayconcat", "arraydistinct", "arraymap",
+    "arrayfilter", "arraymerge", "arraypop", "arrayrange",
+    "arrayresize", "split", "regextract", "json_extract_array",
+    "json_extract_scalar_array", "values",
+    "object_keys", "object_values",
+}
+_ARRAY_FN_RE = re.compile(r"\b(" + "|".join(sorted(_ARRAY_PRODUCING_FNS)) + r")\s*\(")
+# Arrow array access. Matches both the JSON-string cast ``col -> []`` and an
+# array-typed sub-field access ``col -> field[]`` / ``col -> a.b[]``; both
+# yield an array. (The engine only matched ``-> []``; recognising the named
+# form too removes a false-positive WARN-035 on rules that read a native
+# array sub-field via the arrow operator.)
+_ARRAY_SUFFIX_RE = re.compile(r"->\s*[\w.]*\[\s*\]")
+_XDM_ASSIGN_RE = re.compile(r"xdm\.[\w.]+\s*=")
+_DF_STAGE_RE = re.compile(r"^\s*\|\s*(\w+)\b")
+_DF_DEF_RE = re.compile(r"^\s*([a-zA-Z_]\w*)\s*=")
+_DF_RESERVED = {"_time", "_raw_log"}
+_DF_STAGE_WORDS = {"alter", "filter", "comp", "config", "target"}
+
+
+def _split_top_level_args(s: str) -> List[str]:
+    """Split a function-arg list at top-level commas (paren and string aware)."""
+    out: List[str] = []
+    depth = 0
+    start = 0
+    in_str = None
+    for i, ch in enumerate(s):
+        if in_str:
+            if ch == in_str and s[i - 1] != "\\":
+                in_str = None
+            continue
+        if ch in ('"', "'"):
+            in_str = ch
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            out.append(s[start:i])
+            start = i + 1
+    out.append(s[start:])
+    return [a.strip() for a in out if a.strip()]
+
+
+def _rhs_is_array_typed(rhs: str, known_array_vars: set) -> bool:
+    """Decide whether an RHS expression produces an array. ``known_array_vars``
+    feeds in already-classified array temps so chains propagate."""
+    t = re.sub(r"[,;]\s*$", "", rhs.strip())
+    if not t:
+        return False
+    if _ARRAY_SUFFIX_RE.search(t):
+        return True
+    fn_match = re.match(r"^([a-zA-Z_]\w*)\s*\(", t)
+    if fn_match:
+        # Verify the matching close paren is at the end of the expression.
+        depth = 0
+        close_idx = -1
+        in_str = None
+        for i in range(len(fn_match.group(0)) - 1, len(t)):
+            ch = t[i]
+            if in_str:
+                if ch == in_str and t[i - 1] != "\\":
+                    in_str = None
+                continue
+            if ch in ('"', "'"):
+                in_str = ch
+                continue
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    close_idx = i
+                    break
+        fn_name = fn_match.group(1).lower()
+        wraps_whole = close_idx == len(t) - 1
+        if wraps_whole:
+            if fn_name in _ARRAY_PRODUCING_FNS:
+                return True
+            if fn_name in ("if", "coalesce"):
+                inner = t[len(fn_match.group(0)):close_idx]
+                args = _split_top_level_args(inner)
+                # if(cond, then, ..., else): value positions are everything
+                # after the first arg. coalesce: every arg is a value.
+                value_args = args[1:] if fn_name == "if" else args
+                for a in value_args:
+                    cleaned = a.strip()
+                    if cleaned in ("null", ""):
+                        continue
+                    if _rhs_is_array_typed(cleaned, known_array_vars):
+                        return True
+                return False
+            # Other scalar-returning calls (arraystring, arrayindex,
+            # array_length, to_string, concat, ...) are not array-typed.
+            return False
+    bare = re.match(r"^([a-zA-Z_]\w*)\s*$", t)
+    if bare and bare.group(1) in known_array_vars:
+        return True
+    if _ARRAY_FN_RE.search(t):
+        return True
+    return False
+
+
+def _analyse_dataflow(code_lines: List[str]) -> dict:
+    """Return ``{"defs": [...], "reachable": set, "array_typed": set}``.
+
+    ``defs`` is a list of ``{name, line (1-indexed), is_underscore,
+    rhs_text}``. Mirrors the engine's analyseDataflow exactly so the
+    bundle linter's verdicts match the full engine offline.
+    """
+    all_parts: List[str] = []
+    for raw in code_lines:
+        if raw.lstrip().startswith("//"):
+            all_parts.append("")
+        else:
+            all_parts.append(raw.split("//", 1)[0])
+
+    # Stage tracking -- only collect defs inside alter stages.
+    cur_stage = ""
+    stage_of: List[str] = []
+    for cp in all_parts:
+        sm = _DF_STAGE_RE.match(cp)
+        if sm:
+            cur_stage = sm.group(1).lower()
+        stage_of.append(cur_stage)
+
+    # Paren-aware def detection at depth 0.
+    defs: List[dict] = []
+    paren_depth = 0
+    for i, cp in enumerate(all_parts):
+        stage = stage_of[i]
+        start_depth = paren_depth
+        stripped = re.sub(r'"[^"]*"', '""', cp)
+        stripped = re.sub(r"'[^']*'", "''", stripped)
+        for ch in stripped:
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+        if stage and stage != "alter":
+            continue
+        if start_depth > 0:
+            continue
+        m = _DF_DEF_RE.match(cp)
+        if not m:
+            continue
+        name = m.group(1)
+        if name in _DF_RESERVED or name in _DF_STAGE_WORDS:
+            continue
+        defs.append(
+            {"name": name, "line": i + 1, "is_underscore": name.startswith("_"), "rhs_text": ""}
+        )
+
+    real_def_lines = {d["line"] - 1 for d in defs}
+
+    def _is_stage_start(cp: str) -> bool:
+        return bool(re.match(r"^\s*\|\s*\w+", cp))
+
+    def _rhs_end(start: int) -> int:
+        end = len(all_parts) - 1
+        for j in range(start + 1, len(all_parts)):
+            cp = all_parts[j]
+            if _is_stage_start(cp) or j in real_def_lines or _XDM_ASSIGN_RE.search(cp):
+                return j - 1
+        return end
+
+    for d in defs:
+        start = d["line"] - 1
+        d["rhs_text"] = "\n".join(all_parts[start: _rhs_end(start) + 1])
+
+    # Locate the xdm.* assignment block (first xdm.* assignment to EOF).
+    first_xdm_idx = -1
+    for i, cp in enumerate(all_parts):
+        if _XDM_ASSIGN_RE.search(cp):
+            first_xdm_idx = i
+            break
+
+    reachable: set = set()
+    if first_xdm_idx >= 0:
+        # Seed: a def is reachable if its name appears in the xdm.* block
+        # OUTSIDE its own def window (a self-reference must not count).
+        for d in defs:
+            if d["name"] in reachable:
+                continue
+            skip_idx: set = set()
+            for dd in defs:
+                if dd["name"] != d["name"]:
+                    continue
+                start = dd["line"] - 1
+                for k in range(start, _rhs_end(start) + 1):
+                    skip_idx.add(k)
+            blob = [
+                "" if k in skip_idx else all_parts[k]
+                for k in range(first_xdm_idx, len(all_parts))
+            ]
+            if re.search(r"\b" + re.escape(d["name"]) + r"\b", "\n".join(blob)):
+                reachable.add(d["name"])
+        # Transitive expansion through reachable defs' RHS.
+        changed = True
+        while changed:
+            changed = False
+            for reach_name in list(reachable):
+                for cand in defs:
+                    if cand["name"] in reachable or cand["name"] == reach_name:
+                        continue
+                    for d in defs:
+                        if d["name"] != reach_name:
+                            continue
+                        if re.search(r"\b" + re.escape(cand["name"]) + r"\b", d["rhs_text"]):
+                            reachable.add(cand["name"])
+                            changed = True
+
+    # Array-typed BFS.
+    array_typed: set = set()
+    changed = True
+    while changed:
+        changed = False
+        for d in defs:
+            if d["name"] in array_typed:
+                continue
+            rhs = d["rhs_text"]
+            eq = rhs.find("=")
+            if eq >= 0:
+                rhs = rhs[eq + 1:]
+            if _rhs_is_array_typed(rhs, array_typed):
+                array_typed.add(d["name"])
+                changed = True
+
+    return {"defs": defs, "reachable": reachable, "array_typed": array_typed}
 
 
 # --------------------------------------------------------------------
@@ -735,6 +1013,548 @@ def _check_err027(
 
 
 # --------------------------------------------------------------------
+# Schema-aware + dataflow rules
+# --------------------------------------------------------------------
+
+
+def _is_model(code_lines: List[str]) -> bool:
+    return any(re.match(r"\s*\[MODEL:", ln) for ln in code_lines)
+
+
+_GC_RAW_HEADER_RE = re.compile(r'\s*\[MODEL:\s*dataset\s*=\s*"?(\w+)')
+
+
+def _is_gc_raw(code_lines: List[str]) -> bool:
+    """True when the MODEL header targets a ``_gc_raw`` dataset. The unused-
+    field rejections (ERR-019, ERR-025) are a hard block only on GoCortex
+    ``_gc_raw`` datasets; plain ``_raw`` datasets tolerate the same shapes,
+    so these checks are scoped to ``_gc_raw`` to match Cortex."""
+    for ln in code_lines:
+        m = _GC_RAW_HEADER_RE.match(ln)
+        if m:
+            return m.group(1).endswith("_gc_raw")
+    return False
+
+
+# ----- ERR-019  unused underscore temp (never reaches an xdm.* assignment)
+
+
+def _check_err019(code_lines: List[str], df: dict) -> List[dict]:
+    if not _is_model(code_lines) or not _is_gc_raw(code_lines):
+        return []
+    out: List[dict] = []
+    seen: set = set()
+    for d in df["defs"]:
+        if not d["is_underscore"] or d["name"] in seen:
+            continue
+        seen.add(d["name"])
+        if d["name"] in df["reachable"]:
+            continue
+        out.append(
+            _violation(
+                "ERR-019",
+                "error",
+                d["line"],
+                f"Underscore variable '{d['name']}' is defined but never "
+                "reaches any xdm.* assignment, even through other "
+                "_-prefixed intermediaries. Cortex rejects this on "
+                "_gc_raw datasets as 'unused field'.",
+                f"Map the tail of the chain from '{d['name']}' to an xdm.* "
+                "field, or remove the dead intermediary chain.",
+            )
+        )
+    return out
+
+
+# ----- ERR-025  orphan temp whose only consumer is inside concat/arraystring
+
+
+_HIDING_FNS = ("concat", "arraystring")
+
+
+def _inside_hiding_fn(full_text: str, abs_start: int) -> bool:
+    """Walk back from a reference to find its enclosing call; True if that
+    call (or an outer call) is concat() / arraystring()."""
+    before = full_text[:abs_start]
+    depth = 0
+    k = len(before) - 1
+    while k >= 0:
+        ch = before[k]
+        if ch == ")":
+            depth += 1
+        elif ch == "(":
+            if depth == 0:
+                head = before[:k]
+                fm = re.search(r"([A-Za-z_]\w*)\s*$", head)
+                if not fm:
+                    return False
+                if fm.group(1).lower() in _HIDING_FNS:
+                    return True
+                return _inside_hiding_fn(full_text, k)
+            depth -= 1
+        k -= 1
+    return False
+
+
+def _check_err025(code_lines: List[str]) -> List[dict]:
+    if not _is_model(code_lines) or not _is_gc_raw(code_lines):
+        return []
+    cl: List[str] = []
+    for raw in code_lines:
+        cl.append("" if raw.lstrip().startswith("//") else raw.split("//", 1)[0])
+    defs: List[dict] = []
+    pd = 0
+    for i, cp in enumerate(cl):
+        start_depth = pd
+        st = re.sub(r'"[^"]*"', '""', cp)
+        st = re.sub(r"'[^']*'", "''", st)
+        for ch in st:
+            if ch == "(":
+                pd += 1
+            elif ch == ")":
+                pd = max(0, pd - 1)
+        if start_depth > 0:
+            continue
+        m = re.match(r"^\s*(_[A-Za-z]\w*)\s*=", cp)
+        if not m or m.group(1) in ("_time", "_raw_log"):
+            continue
+        defs.append({"name": m.group(1), "line": i + 1})
+    if not defs:
+        return []
+    full = "\n".join(cl)
+    offs: List[int] = []
+    off = 0
+    for ln in cl:
+        offs.append(off)
+        off += len(ln) + 1
+    out: List[dict] = []
+    for d in defs:
+        rx = re.compile(r"\b" + re.escape(d["name"]) + r"\b")
+        refs: List[int] = []
+        for m in rx.finditer(full):
+            li = 0
+            for idx, o in enumerate(offs):
+                if o <= m.start():
+                    li = idx
+                else:
+                    break
+            if li + 1 == d["line"]:
+                continue
+            refs.append(m.start())
+        if not refs:
+            continue
+        if all(_inside_hiding_fn(full, r) for r in refs):
+            out.append(
+                _violation(
+                    "ERR-025",
+                    "error",
+                    d["line"],
+                    f"'{d['name']}' is only referenced inside concat() / "
+                    "arraystring() bodies. Cortex's unused-field tracer does "
+                    "not follow into these function bodies and reports it as "
+                    "'unused field' on _gc_raw datasets.",
+                    f"Inline the derivation of '{d['name']}' directly into "
+                    "the concat() / arraystring() call, or drain it through a "
+                    "bareword identity assignment to an xdm.* field before the "
+                    "consumer.",
+                )
+            )
+    return out
+
+
+# ----- ERR-020  invented xdm.* assignment target (not a real leaf field)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if not la:
+        return lb
+    if not lb:
+        return la
+    prev = list(range(lb + 1))
+    for i in range(la):
+        cur = [i + 1] + [0] * lb
+        for j in range(lb):
+            cost = 0 if a[i] == b[j] else 1
+            cur[j + 1] = min(cur[j] + 1, prev[j + 1] + 1, prev[j] + cost)
+        prev = cur
+    return prev[lb]
+
+
+def _check_err020(code_lines: List[str]) -> List[dict]:
+    if not _is_model(code_lines):
+        return []
+    known = list(load_xdm_paths().keys())
+    out: List[dict] = []
+    seen: set = set()
+    lhs_re = re.compile(r"^\s*(xdm\.[\w.]+)\s*=(?!=)")
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        m = lhs_re.match(raw.split("//", 1)[0])
+        if not m:
+            continue
+        path = m.group(1)
+        if path in seen:
+            continue
+        seen.add(path)
+        if xdm_path_exists(path):
+            continue
+        scored = sorted(known, key=lambda p: _edit_distance(path, p))[:3]
+        hint = f" Closest matches: {', '.join(scored)}." if scored else ""
+        out.append(
+            _violation(
+                "ERR-020",
+                "error",
+                i + 1,
+                f"'{path}' is not a known XDM field. Cortex rejects "
+                f"assignments to invented paths.{hint}",
+                "Use a real XDM field from references/xdm-schema.md, or pick "
+                "the closest semantic match above.",
+            )
+        )
+    return out
+
+
+# ----- WARN-014  quoted XDM_CONST value
+
+
+_QUOTED_CONST_RE = re.compile(r'"(XDM_CONST\.[A-Z][A-Z0-9_]*)"')
+
+
+def _check_warn014(code_lines: List[str]) -> List[dict]:
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        for m in _QUOTED_CONST_RE.finditer(raw.split("//", 1)[0]):
+            out.append(
+                _violation(
+                    "WARN-014",
+                    "warning",
+                    i + 1,
+                    f"XDM_CONST value {m.group(1)} is quoted. Cortex treats a "
+                    "quoted constant as a string literal and drops the "
+                    "mapping.",
+                    f"Remove the quotes: {m.group(1)}.",
+                )
+            )
+    return out
+
+
+# ----- WARN-015  quoted dataset name in the MODEL header
+
+
+_MODEL_QUOTED_DS = re.compile(r'\[MODEL:\s*dataset\s*=\s*"')
+
+
+def _check_warn015(code_lines: List[str]) -> List[dict]:
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        if _MODEL_QUOTED_DS.search(raw):
+            out.append(
+                _violation(
+                    "WARN-015",
+                    "warning",
+                    i + 1,
+                    "Dataset name is quoted in the MODEL header. MODEL "
+                    "declarations use an unquoted dataset name.",
+                    'Write dataset=name_raw, not dataset="name_raw".',
+                )
+            )
+    return out
+
+
+# ----- WARN-017  leading pipe on the first stage after the MODEL header
+
+
+def _check_warn017(code_lines: List[str]) -> List[dict]:
+    out: List[dict] = []
+    seen_model = False
+    for i, raw in enumerate(code_lines):
+        if re.match(r"\s*\[MODEL:", raw):
+            seen_model = True
+            continue
+        if not seen_model:
+            continue
+        if not raw.strip() or raw.lstrip().startswith("//"):
+            continue
+        if raw.lstrip().startswith("|"):
+            out.append(
+                _violation(
+                    "WARN-017",
+                    "warning",
+                    i + 1,
+                    "The first stage after the MODEL header has a leading "
+                    "pipe. Write 'alter' or 'filter' directly.",
+                    "Remove the leading '|' on the first stage.",
+                )
+            )
+        break
+    return out
+
+
+# ----- WARN-018  _time assigned in a MODEL rule
+
+
+_TIME_ASSIGN_RE = re.compile(r"^\s*_time\s*=(?!=)")
+
+
+def _check_warn018(code_lines: List[str]) -> List[dict]:
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        if _TIME_ASSIGN_RE.match(raw.split("//", 1)[0]):
+            out.append(
+                _violation(
+                    "WARN-018",
+                    "warning",
+                    i + 1,
+                    "_time is assigned in a MODEL rule. Cortex sets the event "
+                    "timestamp during INGEST; MODEL rules must not assign "
+                    "_time.",
+                    "Remove the _time assignment.",
+                )
+            )
+    return out
+
+
+# ----- ERR-009 / ERR-010  terminal semicolon + no trailing comma
+
+
+def _check_err009_010(code_lines: List[str]) -> List[dict]:
+    last_idx = -1
+    parts: List[str] = []
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        parts.append(cp)
+        if cp.strip():
+            last_idx = i
+    if last_idx < 0:
+        return []
+    tail = "\n".join(parts).rstrip()
+    if not tail.endswith(";"):
+        return [
+            _violation(
+                "ERR-009",
+                "error",
+                last_idx + 1,
+                "Rule does not end with a terminal semicolon. The Cortex IDE "
+                "rejects a rule with no ';' at the end.",
+                "End the rule with ';'.",
+            )
+        ]
+    pre = tail[:-1].rstrip()
+    if pre.endswith(","):
+        return [
+            _violation(
+                "ERR-010",
+                "error",
+                last_idx + 1,
+                "Trailing comma before the terminal semicolon. The last field "
+                "assignment must not have a trailing comma.",
+                "Remove the comma before ';'.",
+            )
+        ]
+    return []
+
+
+# ----- ERR-011  self-referencing xdm field
+
+
+def _check_err011(code_lines: List[str]) -> List[dict]:
+    out: List[dict] = []
+    pat = re.compile(r"^\s*(xdm\.[\w.]+)\s*=(?!=)(.*)$")
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        m = pat.match(_strip_line_comment(raw))
+        if not m:
+            continue
+        lhs, rhs = m.group(1), m.group(2)
+        if re.search(r"(?<![\w.])" + re.escape(lhs) + r"(?![\w])", rhs):
+            out.append(
+                _violation(
+                    "ERR-011",
+                    "error",
+                    i + 1,
+                    f"{lhs} references itself on the right-hand side of its "
+                    "own assignment. Cortex rejects self-referencing XDM "
+                    "fields.",
+                    f"Assign {lhs} from a temp or raw column, not from "
+                    f"coalesce({lhs}, ...) or any expression that reads "
+                    f"{lhs}.",
+                )
+            )
+    return out
+
+
+# ----- WARN-035  array-typed XDM field assigned a scalar value
+
+
+_WARN035_ASSIGN_RE = re.compile(r"^(xdm\.[\w.]+)\s*=\s*(.+?)\s*$")
+
+
+def _check_warn035(code_lines: List[str], df: dict) -> List[dict]:
+    if not _is_model(code_lines):
+        return []
+    known_array = df["array_typed"]
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        t = raw.lstrip()
+        if t.startswith("//"):
+            continue
+        m = _WARN035_ASSIGN_RE.match(t.split("//", 1)[0])
+        if not m:
+            continue
+        path = m.group(1)
+        rhs = re.sub(r"[,;]\s*$", "", m.group(2).strip())
+        if not rhs or rhs == "null" or "XDM_CONST." in rhs:
+            continue
+        if not xdm_path_is_array(path):
+            continue
+        if _rhs_is_array_typed(rhs, known_array):
+            continue
+        # Multi-line if(...arraycreate...) wrappers are common; defer when the
+        # next few lines complete the array wrap.
+        lookahead = " ".join(code_lines[i: i + 8])
+        if re.search(r"\b(arraycreate|arrayconcat|arraymerge)\s*\(", lookahead) and re.search(
+            r"\b(if|coalesce)\s*\(", rhs
+        ):
+            continue
+        out.append(
+            _violation(
+                "WARN-035",
+                "warning",
+                i + 1,
+                f"'{path}' is an Array-type XDM field but is assigned a "
+                "scalar value. Wrap with arraycreate() or use an "
+                "array-producing function so the shape matches the declared "
+                "field.",
+                f"Wrap the value: {path} = if(_value != null, "
+                "arraycreate(_value), null).",
+            )
+        )
+    return out
+
+
+# ----- WARN-037  log-level word echoed into xdm.alert.severity
+
+
+# A log-level word, only when it is the WHOLE quoted literal (so a value
+# that merely contains "error", e.g. "Error Page Probe", is not flagged).
+_LOG_LEVEL_VALUE_RE = re.compile(
+    r'^"\s*(warning|warn|error|err|notice|debug)\s*"$', re.IGNORECASE
+)
+_SEVERITY_ASSIGN_START = re.compile(r"^\s*xdm\.alert\.severity\s*=(?!=)")
+_ANY_ASSIGN_START = re.compile(r"^\s*(?:xdm\.[\w.]+|_[A-Za-z]\w*|[A-Za-z]\w*)\s*=(?!=)")
+_FN_CALL_WRAP_RE = re.compile(r"^(if|coalesce)\s*\((.*)\)$", re.IGNORECASE | re.DOTALL)
+
+
+def _depth_delta(text: str) -> int:
+    """Net paren/bracket depth change for a line, string-aware."""
+    d = 0
+    for ch in _strip_strings(text):
+        if ch in "([":
+            d += 1
+        elif ch in ")]":
+            d -= 1
+    return d
+
+
+def _severity_value_log_levels(rhs: str) -> List[str]:
+    """Log-level words used in VALUE positions of a severity RHS.
+
+    A severity RHS is a direct literal, an ``if(cond, val, ..., default)``
+    chain, or a ``coalesce(val, ...)``. Only the value positions matter:
+    ``if(_level = "warning", ...)`` tests the vendor input (fine), whereas
+    ``..., "Warning")`` echoes a log-level word into the band field (bad).
+    Recurses into nested if() / coalesce() value branches.
+    """
+    rhs = re.sub(r"[,;]\s*$", "", rhs.strip()).strip()
+    m = _FN_CALL_WRAP_RE.match(rhs)
+    if m:
+        fn = m.group(1).lower()
+        args = _split_top_level_args(m.group(2))
+        if fn == "coalesce":
+            values = args
+        else:  # if: values at odd indices, plus a trailing default if odd count
+            values = [a for idx, a in enumerate(args) if idx % 2 == 1]
+            if len(args) % 2 == 1 and args:
+                values.append(args[-1])
+        found: List[str] = []
+        for v in values:
+            found.extend(_severity_value_log_levels(v))
+        return found
+    mv = _LOG_LEVEL_VALUE_RE.match(rhs)
+    return [mv.group(1)] if mv else []
+
+
+def _check_warn037(code_lines: List[str]) -> List[dict]:
+    """xdm.alert.severity is a band scale (Informational / Low / Medium /
+    High / Critical), not a syslog level. A log-level word assigned to it
+    -- directly or as an if-branch RESULT -- is a silent miscategorisation.
+    Band it instead (see transformation-patterns.md log-level vocabulary).
+    Comparison conditions (`_level = "warning"`) are the correct banding
+    input and are not flagged."""
+    out: List[dict] = []
+    n = len(code_lines)
+    i = 0
+    while i < n:
+        first = _strip_line_comment(code_lines[i])
+        if _SEVERITY_ASSIGN_START.match(first):
+            # Collect the assignment window: this line plus continuations,
+            # tracking paren depth so an inner if() that spans several lines
+            # is captured whole.
+            window = [i]
+            depth = _depth_delta(first)
+            j = i + 1
+            while j < n:
+                cp = _strip_line_comment(code_lines[j])
+                if not cp.strip():
+                    j += 1
+                    continue
+                if depth <= 0 and (
+                    _ANY_ASSIGN_START.match(cp)
+                    or cp.lstrip().startswith("|")
+                    or cp.strip() == ";"
+                ):
+                    break
+                window.append(j)
+                depth += _depth_delta(cp)
+                j += 1
+            rhs = "\n".join(_strip_line_comment(code_lines[k]) for k in window)
+            rhs = re.sub(r"^\s*xdm\.alert\.severity\s*=", "", rhs, count=1)
+            for word in _severity_value_log_levels(rhs):
+                out.append(
+                    _violation(
+                        "WARN-037",
+                        "warning",
+                        i + 1,
+                        f'xdm.alert.severity is assigned the log-level word '
+                        f'"{word}". Severity is a band scale (Informational / '
+                        "Low / Medium / High / Critical), not a syslog level, "
+                        "so a log-level word there is a silent miscategorisation "
+                        "downstream severity filters miss.",
+                        "Band log-level vocabulary into proper severity bands "
+                        "and map the raw level to xdm.event.log_level via "
+                        "XDM_CONST.LOG_LEVEL_* -- see "
+                        "references/transformation-patterns.md log-level "
+                        "vocabulary.",
+                    )
+                )
+            i = j
+            continue
+        i += 1
+    return out
+
+
+# --------------------------------------------------------------------
 # INFO-012  Cascade root-cause hint
 # --------------------------------------------------------------------
 
@@ -818,7 +1638,11 @@ def lint(source: str) -> List[dict]:
         [_strip_line_comment(ln) for ln in code_lines]
     )
 
+    df = _analyse_dataflow(code_lines)
+
     findings: List[dict] = []
+    findings += _check_err009_010(code_lines)
+    findings += _check_err011(code_lines)
     findings += _check_err012(code_lines, stage_of)
     findings += _check_err013(joined, line_starts)
     findings += _check_err014(code_lines, stage_of)
@@ -826,8 +1650,17 @@ def lint(source: str) -> List[dict]:
     findings += _check_err016(code_lines)
     findings += _check_err017(joined, code_lines, line_starts)
     findings += _check_err018(code_lines)
+    findings += _check_err019(code_lines, df)
+    findings += _check_err020(code_lines)
     findings += _check_err024(code_lines, stage_of, stage_start)
+    findings += _check_err025(code_lines)
     findings += _check_err027(code_lines, stage_of, stage_start)
+    findings += _check_warn014(code_lines)
+    findings += _check_warn015(code_lines)
+    findings += _check_warn017(code_lines)
+    findings += _check_warn018(code_lines)
+    findings += _check_warn035(code_lines, df)
+    findings += _check_warn037(code_lines)
 
     findings.sort(key=lambda v: (v["line"], v["rule_id"]))
     findings += _cascade_hint(findings)

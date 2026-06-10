@@ -38,6 +38,28 @@ When you map one field of a pair, always map the other:
 | `xdm.source.host.hostname` <-> `xdm.source.host.fqdn` | Mirror short hostname / FQDN (same for target/intermediate) |
 | `xdm.source.user.identifier` <-> `xdm.source.user.username` | Stable user ID + display name when both present |
 
+## String passthrough fallback (mandatory for vendor-text fields)
+
+Every categorical `if()`-chain that assigns to a free-String XDM field carrying vendor text MUST end with a `_field != null, _field` passthrough, so an unmapped vendor value is preserved rather than silently nulled. Without the passthrough, any value your branches did not anticipate vanishes, and the gap only surfaces in production when an analyst notices the field is empty.
+
+```
+// WRONG -- unmapped vendor actions are silently dropped
+xdm.observer.action = if(
+    _action = "ALLOW", "allow",
+    _action = "BLOCK", "block")
+
+// RIGHT -- the passthrough preserves anything not explicitly mapped
+xdm.observer.action = if(
+    _action = "ALLOW", "allow",
+    _action = "BLOCK", "block",
+    _action != null,   _action)
+```
+
+This applies to free-String fields that carry the vendor's own text, such as `xdm.alert.subcategory`, `xdm.observer.action`, `xdm.alert.original_threat_name`, `xdm.event.outcome_reason`. Two exceptions:
+
+- Closed-list `XDM_CONST` targets (`xdm.event.outcome`, `xdm.alert.category`, `xdm.network.http.method`, and the rest in the XDM_CONST-required table below) keep OMITTING the default branch, so an unmatched value resolves to null. A raw string would break the enum type.
+- Band-vocabulary String fields like `xdm.alert.severity` floor to a band (`_field != null, "Low"`) or omit the default; they NEVER echo the raw value, because an arbitrary string is not a valid band (see the log-level vocabulary rule).
+
 ## Array field construction
 
 Array-typed XDM fields (marked `(Array)` in [xdm-schema.md](xdm-schema.md)) MUST use `arraycreate()`. Always null-guard:
@@ -154,6 +176,32 @@ xdm.alert.severity = if(
     _risk_level = "critical", "Critical",
     _risk_level != null,      _risk_level)
 ```
+
+The `_risk_level != null, _risk_level` floor is safe here because the source vocabulary IS the band vocabulary: an unmatched value is still a band word. Do NOT use a raw passthrough when the source vocabulary is something else, such as the log-level words below.
+
+## Log-level vocabulary (severity words that are really log levels)
+
+Some vendors put log-level words in the severity field: `debug`, `info` / `informational`, `notice`, `warning`, `error`, `critical`. These are log levels, not alert severities. Band them into `xdm.alert.severity` (Informational / Low / Medium / High / Critical) AND map them to `xdm.event.log_level` via `XDM_CONST.LOG_LEVEL_*`. Never echo a log-level word -- `"Warning"`, `"Error"`, `"Notice"`, `"Debug"` -- into `xdm.alert.severity`. That field is a band scale, not a syslog level, so a raw log-level word there is a silent miscategorisation that downstream severity filters miss.
+
+```
+xdm.alert.severity = if(
+    _level = "debug",    "Informational",
+    _level = "info",     "Informational",
+    _level = "notice",   "Low",
+    _level = "warning",  "Medium",
+    _level = "error",    "High",
+    _level = "critical", "Critical",
+    _level != null,      "Low"),
+xdm.event.log_level = if(
+    _level = "debug",    XDM_CONST.LOG_LEVEL_INFORMATIONAL,
+    _level = "info",     XDM_CONST.LOG_LEVEL_INFORMATIONAL,
+    _level = "notice",   XDM_CONST.LOG_LEVEL_NOTICE,
+    _level = "warning",  XDM_CONST.LOG_LEVEL_WARNING,
+    _level = "error",    XDM_CONST.LOG_LEVEL_ERROR,
+    _level = "critical", XDM_CONST.LOG_LEVEL_CRITICAL)
+```
+
+The `xdm.alert.severity` chain ends with a `_level != null, "Low"` band floor, NOT a raw passthrough, so an unrecognised value still lands on a real band instead of leaking a log-level word. The `xdm.event.log_level` chain omits the default branch: it is an `XDM_CONST` closed list, so an unmatched value resolves to null (safe). The linter flags WARN-037 when a log-level word is assigned to `xdm.alert.severity`.
 
 ## Categorical enum array -> THREAT_CATEGORY scalar
 
@@ -295,9 +343,35 @@ Common vendor identity tokens map to `XDM_CONST.IDENTITY_TYPE_*` as follows:
 
 Do NOT map `ServiceAccount` to `IDENTITY_TYPE_USER`.
 
+## Authentication and MFA mapping
+
+Authentication logs have dedicated structured homes under `xdm.auth.*`. These fields are easy to miss because the anchor index has thin precedent for them -- check the schema, not just the anchor lookup, before declaring a field unmapped:
+
+| Vendor field | XDM target |
+| --- | --- |
+| `mfa_method`, `mfa_type`, `factor` | `xdm.auth.mfa.method` (String) |
+| `mfa_provider` | `xdm.auth.mfa.provider` (String) |
+| `is_mfa_needed`, `mfa_required` | `xdm.auth.is_mfa_needed` (Boolean -- wrap with `to_boolean(...)`) |
+| `auth_method`, `authentication_method` | `xdm.auth.auth_method` (String) |
+
+Companion classification: when the log is an authentication event, set `xdm.event.operation` alongside `xdm.event.type = "AUTH"`. Use `XDM_CONST.OPERATION_TYPE_AUTH_MFA` when the event involves MFA, otherwise `XDM_CONST.OPERATION_TYPE_AUTH_LOGIN`:
+
+```
+xdm.event.type = "AUTH",
+xdm.event.operation = if(
+    _mfa_method != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA,
+    XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
+xdm.auth.mfa.method = _mfa_method,
+xdm.auth.is_mfa_needed = to_boolean(_mfa_required)
+```
+
+Never bury `mfa_method` (or device / OS detail) in `xdm.event.description` -- these values have structured homes, and a description-only copy is invisible to downstream queries. The description summarises; it never substitutes (see "Structured event description" below).
+
 ## Structured event description
 
-Build a human-readable summary using `concat()` with conditional sections:
+Emit `xdm.event.description` by default: a deterministic human-readable summary built with `concat()` over the identifying fields. It gives the analyst a one-line gist in the alert view and a consistent free-text search target. It is an ADDITION to the structured XDM fields, never a substitute -- map each value to its own queryable field first, then summarise. Never bury data in the description that belongs in a field of its own.
+
+Build the summary with `concat()` and conditional sections:
 
 ```
 xdm.event.description = concat(

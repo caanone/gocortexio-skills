@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 These are the four canonical shapes for getting vendor fields out of `_raw_log` (or out of pre-parsed top-level columns). Pick the pattern that matches the structure of the incoming log; do NOT copy a skeleton verbatim.
 
-Full production-validated reference rules covering every pattern below live alongside the IDE's shipped rule packs. When you need a complete working exemplar, consult the matching pack rule for the relevant vendor rather than reconstructing from the skeleton.
+For a complete, validated rule that exercises each pattern end to end, see the matching walkthrough in [worked-examples.md](worked-examples.md) rather than reconstructing from the skeleton.
 
 ## Decision tree -- which pattern applies?
 

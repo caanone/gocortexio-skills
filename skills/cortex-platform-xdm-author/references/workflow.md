@@ -63,7 +63,9 @@ Returns a ranked list of `{xdm_path, frequency, exampleVendors[]}`. Treat the fr
 | `>= 10` | Strong -- use without further question |
 | `3 - 9` | Default -- use unless the user's schema reference contradicts |
 | `1 - 2` | Candidate only -- surface to user, do not auto-apply |
-| `0` (no match) | No XDM home -- document in NOT MAPPED block |
+| `0` (no match) | No anchor PRECEDENT -- check the schema before declaring no XDM home |
+
+A `0` result is NOT proof the field has no XDM home. The anchor index records what past rules happened to map; the schema is [xdm-schema.md](xdm-schema.md). Before documenting a field in the NOT MAPPED block, grep xdm-schema.md for the concept (`auth`, `mfa`, `host`, `process`, ...) and only declare no home when the schema genuinely lacks a field. Example: `mfa_method` historically returned `0` anchors, yet `xdm.auth.mfa.method` exists in the schema -- burying it in the description on the strength of the `0` was a mis-mapping.
 
 The script normalises case, whitespace, `.` and `-` punctuation. `Src.IP`, `src-ip`, `_src_ip` all resolve to `src_ip`. If a query returns nothing, try stripping suffixes or prefixes (`srcAddress` -> `src_addr`, drop a leading `client_` or `service_`, drop a trailing `_id` or `_name`).
 
@@ -80,7 +82,7 @@ The JSON is human-readable; each anchor block lists every synonym that has histo
 Assign in this priority order:
 
 1. Observer: `xdm.observer.vendor` and `xdm.observer.product` (hardcoded strings).
-2. Event classification: `xdm.event.type` -- normalised category: `"ALERT"`, `"NETWORK"`, `"AUTH"`, `"EMAIL"`, `"FILE"`, `"PROCESS"`, `"ENDPOINT_ACTIVITY"`, `"AUDIT"`. Then `xdm.event.id`, `xdm.event.original_event_type`, `xdm.event.description`, `xdm.event.outcome`.
+2. Event classification: `xdm.event.type` -- normalised category: `"ALERT"`, `"NETWORK"`, `"AUTH"`, `"EMAIL"`, `"FILE"`, `"PROCESS"`, `"ENDPOINT_ACTIVITY"`, `"AUDIT"`. Then `xdm.event.id`, `xdm.event.original_event_type`, `xdm.event.description`, `xdm.event.outcome`, and `xdm.event.operation` (`XDM_CONST.OPERATION_TYPE_*` -- e.g. `OPERATION_TYPE_AUTH_MFA` / `OPERATION_TYPE_AUTH_LOGIN` for AUTH events, `OPERATION_TYPE_AUDIT` for audit trails; omit only when no constant fits).
 3. Source and target identities: IPs, hostnames, ports, users.
 4. Domain-specific: `xdm.alert.`, `xdm.email.`, `xdm.network.*`, `xdm.auth.*`.
 5. Intermediate fields: for proxy / gateway devices between source and target.

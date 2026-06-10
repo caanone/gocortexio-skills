@@ -56,7 +56,7 @@ See [extraction-patterns.md](extraction-patterns.md) for the four canonical extr
 Assign in this order. Earlier categories first, since later ones often depend on them:
 
 1. Observer identity: `xdm.observer.vendor` and `xdm.observer.product` (hardcoded strings).
-2. Event classification: `xdm.event.type` -- normalised category: `"ALERT"`, `"NETWORK"`, `"AUTH"`, `"EMAIL"`, `"FILE"`, `"PROCESS"`, `"ENDPOINT_ACTIVITY"`, `"AUDIT"`. Then `xdm.event.id`, `xdm.event.original_event_type`, `xdm.event.description`, `xdm.event.outcome`.
+2. Event classification: `xdm.event.type` -- normalised category: `"ALERT"`, `"NETWORK"`, `"AUTH"`, `"EMAIL"`, `"FILE"`, `"PROCESS"`, `"ENDPOINT_ACTIVITY"`, `"AUDIT"`. Then `xdm.event.id`, `xdm.event.original_event_type`, `xdm.event.description`, `xdm.event.outcome`, and `xdm.event.operation` (`XDM_CONST.OPERATION_TYPE_*` -- e.g. `OPERATION_TYPE_AUTH_MFA` / `OPERATION_TYPE_AUTH_LOGIN` for AUTH events, `OPERATION_TYPE_AUDIT` for audit trails; omit only when no constant fits).
 3. Source and target identities: IPs, hostnames, ports, users.
 4. Domain-specific fields: `xdm.alert.`, `xdm.email.`, `xdm.network.`, `xdm.auth.`.
 5. Intermediate fields: for proxy or gateway devices between source and target.

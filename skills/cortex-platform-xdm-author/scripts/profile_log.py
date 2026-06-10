@@ -48,8 +48,8 @@ Exit codes:
     2   cannot read or parse the sample
 
 Scope: describe the log shape. Does not write rule stages, choose an
-array-projection strategy, or validate suggested XDM paths against a
-live tenant. See ../references/workflow.md for the workflow.
+array-projection strategy, or compile the rule. See
+../references/workflow.md for the workflow.
 
 Python 3.9+ stdlib only.
 """
@@ -633,6 +633,71 @@ def _parent_qualified(path: str) -> str:
 # --------------------------------------------------------------------
 
 
+def recommend_pattern(fmt: str, arrays: list) -> dict:
+    """Map the detected format and object-array shape onto the A/B/C/D
+    extraction patterns from references/extraction-patterns.md. Returns
+    ``{"primary": str, "reason": str, "also": [str, ...]}``."""
+    discriminated = [
+        oa for oa in arrays if oa.get("discriminator")
+    ]
+    header_pairs = [
+        oa for oa in arrays
+        if any("[name=" in (v or "") for v in [oa.get("path", "")])
+    ]
+    also: List[str] = []
+
+    if fmt in ("json", "jsonl"):
+        primary = "A"
+        reason = (
+            "JSON sample: extract with json_extract_scalar(_raw_log, "
+            '"$.path"). If the tenant pre-parses into typed top-level '
+            "columns (so _raw_log is null), switch to Pattern D (arrow "
+            "operator)."
+        )
+        for oa in discriminated:
+            also.append(
+                f"Pattern D' for the role-tagged array {oa['path']} "
+                f"(discriminator '{oa['discriminator']}'): project one "
+                "scalar at a time."
+            )
+        if not discriminated and arrays:
+            also.append(
+                "label/value pairs present -- consider Pattern C "
+                "(regextract on the key/value structure) if paths are not "
+                "fixed."
+            )
+    elif fmt in ("cef", "leef", "syslog-3164", "syslog-5424"):
+        primary = "B"
+        reason = (
+            f"{fmt} is positional / syslog-wrapped: strip the envelope with "
+            "regextract, then split + arrayindex for the positional fields. "
+            "Wrap arrayindex output in to_string() before any downstream "
+            "split / regextract."
+        )
+    elif fmt == "kv":
+        primary = "A"
+        reason = (
+            "key=value parses into a top-level column; apply Pattern A with "
+            "json_extract_scalar(to_string(<column>), \"$.path\") or read "
+            "the parsed columns directly (Pattern D)."
+        )
+    elif fmt in ("csv", "tsv"):
+        primary = "D"
+        reason = (
+            f"{fmt} parses into named top-level columns: reference them "
+            "directly (Pattern D). If the row is carried whole in _raw_log, "
+            "use Pattern B (split + arrayindex)."
+        )
+    else:
+        primary = "?"
+        reason = (
+            "format not recognised; inspect the sample by hand and pick a "
+            "pattern from references/extraction-patterns.md."
+        )
+
+    return {"primary": primary, "reason": reason, "also": also}
+
+
 def profile(source_path: str, text: str) -> dict:
     fmt = detect_format(text)
     try:
@@ -649,6 +714,7 @@ def profile(source_path: str, text: str) -> dict:
         "source": source_path,
         "detected_format": fmt,
         "record_count": len(records),
+        "recommended_pattern": recommend_pattern(fmt, arrays),
         "fields": list(fields.values()),
         "object_arrays": arrays,
     }
@@ -660,13 +726,16 @@ def profile(source_path: str, text: str) -> dict:
 
 
 def _format_text(worksheet: dict) -> str:
+    rec = worksheet.get("recommended_pattern") or {}
     lines = [
         f"source:          {worksheet['source']}",
         f"detected_format: {worksheet['detected_format']}",
         f"record_count:    {worksheet['record_count']}",
-        "",
-        "fields:",
+        f"pattern:         {rec.get('primary', '?')} -- {rec.get('reason', '')}",
     ]
+    for extra in rec.get("also", []):
+        lines.append(f"                 also: {extra}")
+    lines.extend(["", "fields:"])
     for f in worksheet["fields"]:
         cand = f.get("xdm_candidates") or []
         cand_str = (

@@ -2577,8 +2577,16 @@
       ]
     },
     "xdm.auth.mfa.method": {
-      "frequency": 7,
+      "frequency": 12,
       "synonyms": [
+        {
+          "synonym": "mfa_method",
+          "count": 3
+        },
+        {
+          "synonym": "mfa_type",
+          "count": 2
+        },
         {
           "synonym": "authenticationcontext",
           "count": 2
@@ -2609,6 +2617,8 @@
         }
       ],
       "synonyms_simple": [
+        "mfa_method",
+        "mfa_type",
         "authenticationcontext",
         "credentialtype",
         "factor",
