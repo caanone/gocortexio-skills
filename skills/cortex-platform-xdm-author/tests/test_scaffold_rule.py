@@ -134,6 +134,98 @@ class TestScaffoldOutput(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestScaffoldSyslogStage0(unittest.TestCase):
+    """A syslog worksheet must gain the Stage 0 envelope layer before the
+    payload: PRI-anchored host capture, the function-form priority decode
+    in separate alter stages, and the envelope drains seeded as a
+    fallback."""
+
+    def _rule(self) -> str:
+        return _make("syslog_cortexgrid.log", vendor="CortexGrid",
+                     product="Sentinel", dataset="cortexgrid_sentinel_raw")
+
+    def test_emits_pri_and_host_capture(self):
+        rule = self._rule()
+        self.assertIn('regextract(_raw_log, "^<(\\d{1,3})>")', rule)
+        self.assertIn("_syslog_host = coalesce(_host_5424, _host_3164)", rule)
+
+    def test_facility_and_severity_in_separate_alters(self):
+        rule = self._rule()
+        # Severity reads the facility temp, so they cannot share an alter
+        # (ERR-024). The decode must be split across two stages.
+        self.assertIn("_pri_facility = to_integer(divide(_pri, 8))", rule)
+        self.assertIn(
+            "_pri_severity = to_integer(subtract(_pri, "
+            "multiply(_pri_facility, 8)))",
+            rule,
+        )
+
+    def test_envelope_drains_present(self):
+        rule = self._rule()
+        self.assertIn("xdm.observer.name = _syslog_host", rule)
+        self.assertIn("xdm.event.log_level = _pri_log_level", rule)
+        self.assertIn("xdm.alert.severity = _pri_sev_band", rule)
+
+    def test_self_gates_clean_including_envelope_lints(self):
+        rule = self._rule()
+        ids = [v["rule_id"] for v in _lint.lint(rule)]
+        self.assertNotIn("WARN-040", ids)  # PRI-anchored, not vendor-anchored
+        self.assertNotIn("WARN-041", ids)  # severity is decoded
+        errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
+        self.assertEqual(errors, [], f"syslog scaffold not clean: {errors}")
+
+    def test_non_syslog_has_no_stage0(self):
+        rule = _make("sample.kv")
+        self.assertNotIn("_pri_facility", rule)
+        self.assertNotIn("_syslog_host", rule)
+
+
+class TestScaffoldAuthMandatory(unittest.TestCase):
+    """When the profiler flags an authentication event, the scaffold pads
+    the mandatory fields that have an official placeholder, sets
+    xdm.event.type to an authentication value, and lists the un-paddable
+    mandatory fields as TODOs. It always self-gates clean (no errors)."""
+
+    def _rule(self) -> str:
+        return _make("auth_event.jsonl", vendor="Okta", product="SystemLog",
+                     dataset="okta_systemlog_raw")
+
+    def test_event_type_is_authentication(self):
+        self.assertIn('xdm.event.type = "authentication"', self._rule())
+
+    def test_paddable_fields_seeded(self):
+        rule = self._rule()
+        self.assertIn(
+            "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)",
+            rule,
+        )
+        self.assertIn(
+            "xdm.event.operation = XDM_CONST.OPERATION_TYPE_AUTH_LOGIN", rule
+        )
+        self.assertIn('xdm.auth.service = "IDP"', rule)
+        self.assertIn(
+            "xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP", rule
+        )
+
+    def test_unpaddable_fields_listed_as_todo(self):
+        rule = self._rule()
+        # upn / original_event_type / outcome cannot be padded with a static
+        # value, so they appear as AUTH MANDATORY TODOs for the author.
+        self.assertIn("AUTH MANDATORY", rule)
+        self.assertIn("xdm.source.user.upn", rule)
+
+    def test_self_gates_clean(self):
+        errors = [v for v in _lint.lint(self._rule())
+                  if v["severity"] == "error"]
+        self.assertEqual(errors, [], f"auth scaffold not error-clean: {errors}")
+
+    def test_non_auth_worksheet_has_no_auth_block(self):
+        rule = _make("sample.kv")
+        self.assertNotIn('xdm.event.type = "authentication"', rule)
+        self.assertNotIn("EVENT_TAG_AUTHENTICATION", rule)
+        self.assertNotIn("AUTH MANDATORY", rule)
+
+
 class TestScaffoldCli(unittest.TestCase):
     def test_stdin_pipe_exit_zero(self):
         ws = json.dumps(_worksheet("sample.kv"))

@@ -328,5 +328,31 @@ class TestMarkdownLinks(unittest.TestCase):
             )
 
 
+class TestSyslogEnvelopeWiring(unittest.TestCase):
+    """The syslog envelope reference must exist and be reachable from the
+    two documents that route an author to it: the Pattern B section of
+    extraction-patterns.md and the SKILL.md reference map."""
+
+    def test_reference_exists(self):
+        self.assertTrue(
+            (bundle_root() / "references" / "syslog-envelope.md").is_file(),
+            "references/syslog-envelope.md is missing",
+        )
+
+    def test_linked_from_extraction_patterns(self):
+        self.assertIn(
+            "syslog-envelope.md",
+            read_text("references/extraction-patterns.md"),
+            "extraction-patterns.md does not link to syslog-envelope.md",
+        )
+
+    def test_linked_from_skill_md(self):
+        self.assertIn(
+            "syslog-envelope.md",
+            read_text("SKILL.md"),
+            "SKILL.md does not link to syslog-envelope.md",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,9 +21,13 @@ XDM_CONST.* tokens (evaluated as opaque symbols).
 Anything outside that subset is reported as an unsupported construct,
 never silently guessed.
 
-Each record's environment binds `_raw_log` to the record's JSON text and
-every top-level key as a column, so both Pattern A (json_extract_scalar
-on _raw_log) and Pattern D (arrow on parsed columns) work.
+Each record's environment binds every top-level key as a column, so both
+Pattern A (json_extract_scalar on _raw_log) and Pattern D (arrow on
+parsed columns) work. For a JSON object record, `_raw_log` is bound to the
+record's JSON text. For a raw-text record (a JSON string in the sample,
+for example a syslog line), `_raw_log` is bound to the literal text, so
+envelope anchors such as the leading ^<NNN> priority token behave as they
+do on a tenant.
 
 Exit codes:
     0   evaluated; with --expect, all records matched
@@ -635,9 +639,20 @@ def evaluate_rule(rule_text: str, record: Any) -> Optional[Dict[str, Any]]:
     filter dropped the record."""
     env: Dict[str, Any] = {}
     if isinstance(record, dict):
+        # A structured (JSON) source: bind every top-level key as a column
+        # and present _raw_log as the record's JSON text, the way Cortex
+        # does for a JSON-bodied dataset.
         for k, v in record.items():
             env[k] = v
-    env["_raw_log"] = json.dumps(record)
+        env["_raw_log"] = json.dumps(record)
+    elif isinstance(record, str):
+        # A raw-text source (for example a syslog line): _raw_log is the
+        # literal text, byte for byte, so regextract anchors such as
+        # ^<\d{1,3}> behave exactly as they do on a tenant. Feed these as a
+        # JSONL sample where each line is a JSON string.
+        env["_raw_log"] = record
+    else:
+        env["_raw_log"] = json.dumps(record)
     xdm: Dict[str, Any] = {}
 
     for kind, body in _parse_stages(rule_text):

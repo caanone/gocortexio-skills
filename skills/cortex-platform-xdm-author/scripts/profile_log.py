@@ -698,6 +698,133 @@ def recommend_pattern(fmt: str, arrays: list) -> dict:
     return {"primary": primary, "reason": reason, "also": also}
 
 
+# --------------------------------------------------------------------
+# Authentication-event detection
+# --------------------------------------------------------------------
+
+# Mandatory XDM target set for the authentication story. Mirrors
+# _AUTH_MANDATORY in lint_rule.py (which raises the advisory WARN-042).
+# Kept here so the profiler can surface the checklist at analysis time.
+_AUTH_MANDATORY = [
+    "xdm.source.ipv4",
+    "xdm.source.port",
+    "xdm.target.ipv4",
+    "xdm.target.port",
+    "xdm.network.ip_protocol",
+    "xdm.event.type",
+    "xdm.event.tags",
+    "xdm.event.operation",
+    "xdm.event.original_event_type",
+    "xdm.event.outcome",
+    "xdm.auth.service",
+    "xdm.source.user.upn",
+]
+
+# Field-name signal. The (?<![a-z]) / (?![a-z]) boundaries keep "auth"
+# from matching inside "author" / "authority" / "authorize" while still
+# firing on "auth_method", "x.auth.result", and similar leaf segments.
+_AUTH_NAME_RE = re.compile(
+    r"(?<![a-z])("
+    r"logon|logoff|login|logout|signin|signon|sign_in|sign_on|"
+    r"authentication|authn|auth|mfa|2fa|otp|sso|saml|oauth|oidc|"
+    r"kerberos|ntlm|credential|password|passwd|upn|idp"
+    r")(?![a-z])"
+)
+
+# Value signal. A representative value matches an authentication-specific
+# token. Matched with word-ish boundaries rather than a raw substring:
+# now that the value scan walks EVERY record's values (not just the first
+# representative sample), a loose substring would false-fire on incidental
+# matches ("sso" inside "lesson", "otp" inside "crypto", "saml" inside a
+# hostname). The leading boundary allows "_" / "-" so vendor mnemonics
+# such as ssh_user_login and cli_user_login_failed still match "login".
+_AUTH_VALUE_RE = re.compile(
+    r"(?<![a-z0-9])("
+    r"logon|logoff|login|logout|logged[ _-]?in|logged[ _-]?out|"
+    r"sign[ _-]?in|sign[ _-]?on|signin|signon|"
+    r"authentication|authenticated|auth success|auth failure|"
+    r"mfa|multi-factor|two-factor|2fa|otp|sso|saml|kerberos|"
+    r"password|credential"
+    r")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+# Stop scanning once we have collected this many distinct signals. The
+# detection result only needs a handful; a mixed multi-event log can carry
+# hundreds of auth lines, and there is no value in walking them all.
+_AUTH_SIGNAL_CAP = 24
+
+
+def detect_authentication(
+    fields: dict, records: "Optional[List[dict]]" = None
+) -> dict:
+    """Auto-detect whether the sample is an authentication event.
+
+    Two independent signals:
+      * name  -- a discovered field/leaf path matches _AUTH_NAME_RE.
+      * value -- a record value matches _AUTH_VALUE_RE.
+
+    The value signal scans EVERY record when ``records`` is supplied,
+    not just the first representative sample. This is essential for
+    positional / syslog-wrapped formats (CEF, LEEF, RFC 3164/5424), where
+    every line collapses into a single ``_message`` field: the auth lines
+    are frequently a minority buried among unrelated traffic, so a
+    first-record-only scan silently misses them. Falls back to per-field
+    sample scanning when records are not supplied.
+
+    Conservative and deterministic: returns the list of signals so the
+    author can see why it fired, plus the mandatory XDM field set to map.
+    Detection feeds the advisory WARN-042 in lint_rule.py -- it never
+    blocks. See references/authentication-mapping.md."""
+    signals: List[dict] = []
+    seen: set = set()
+
+    def _add(field: str, match: str, kind: str) -> None:
+        key = (kind, field, match)
+        if key not in seen:
+            seen.add(key)
+            signals.append({"field": field, "match": match, "kind": kind})
+
+    # Name signal -- every discovered field path.
+    for info in fields.values():
+        path = info.get("path", "")
+        m = _AUTH_NAME_RE.search(path.lower())
+        if m:
+            _add(path, m.group(1), "name")
+
+    # Value signal -- scan all records when available, else fall back to
+    # the per-field representative samples.
+    if records:
+        for rec in records:
+            for path, value in flatten_record(rec).items():
+                if not isinstance(value, str):
+                    continue
+                vm = _AUTH_VALUE_RE.search(value)
+                if vm:
+                    _add(path, vm.group(1).lower(), "value")
+            if len(signals) >= _AUTH_SIGNAL_CAP:
+                break
+    else:
+        for info in fields.values():
+            sample = info.get("sample")
+            if isinstance(sample, str):
+                vm = _AUTH_VALUE_RE.search(sample)
+                if vm:
+                    _add(info.get("path", ""), vm.group(1).lower(), "value")
+
+    detected = bool(signals)
+    out: dict = {"detected": detected, "signals": signals[:12]}
+    if detected:
+        out["mandatory_fields"] = list(_AUTH_MANDATORY)
+        out["guidance"] = (
+            "Authentication signal detected. Map the full mandatory XDM "
+            "field set for the authentication story (see "
+            "references/authentication-mapping.md). Enforcement is advisory "
+            "(lint WARN-042), never a block."
+        )
+    return out
+
+
 def profile(source_path: str, text: str) -> dict:
     fmt = detect_format(text)
     try:
@@ -715,6 +842,7 @@ def profile(source_path: str, text: str) -> dict:
         "detected_format": fmt,
         "record_count": len(records),
         "recommended_pattern": recommend_pattern(fmt, arrays),
+        "authentication": detect_authentication(fields, records),
         "fields": list(fields.values()),
         "object_arrays": arrays,
     }
@@ -747,6 +875,19 @@ def _format_text(worksheet: dict) -> str:
         lines.append(
             f"  {f['path']:<48} {f['type']:<14} "
             f"null={f['null_rate']:<5} -> {cand_str}  sample={sample!r}"
+        )
+    auth = worksheet.get("authentication") or {}
+    if auth.get("detected"):
+        sigs = auth.get("signals", [])
+        shown = ", ".join(
+            f"{s['field']}({s['match']})" for s in sigs[:5]
+        )
+        lines.append("")
+        lines.append("authentication:")
+        lines.append(f"  detected -- {len(sigs)} signal(s): {shown}")
+        lines.append(
+            "  map the mandatory set (advisory WARN-042): "
+            + ", ".join(auth.get("mandatory_fields", []))
         )
     if worksheet["object_arrays"]:
         lines.append("")

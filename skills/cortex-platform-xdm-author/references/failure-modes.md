@@ -122,6 +122,25 @@ The anchor index is a PRECEDENT table -- it records what past rules happened to 
 
 Recovery: before declaring a field unmapped, grep [xdm-schema.md](xdm-schema.md) for the concept (`auth`, `mfa`, `host`, `process`, `registry`, ...). Map to the schema field directly when one exists, even with zero anchor precedent. Only write NOT MAPPED when the schema genuinely has no field for the concept.
 
+## 11. Risk signal thrown away as "no home"
+
+You drop a numeric ratio / deviation / anomaly metric (e.g. `metrics.baseline_deviation`) and justify it as "no XDM home for that value". A ratio with no typed numeric field still fits `xdm.alert.risks` (a free-text String sink), so "no home" is false and a real risk signal is lost.
+
+Recovery: park the metric in `xdm.alert.risks` as free text alongside `risk_score` (see [transformation-patterns.md](transformation-patterns.md) "Risk and deviation metrics"). If you genuinely choose to drop it, record it in NOT MAPPED as "intentionally omitted" with a reason, not "no home".
+
+## 12. Whole payload dumped into the description
+
+You assign the entire ingested log to the issue description, e.g.
+
+```
+xdm.event.description = _raw_log
+xdm.event.description = to_json_string(detail)
+```
+
+This looks like "nothing is lost" but it is the opposite of useful: every value is buried in one free-text blob where structured queries, correlation, and dashboards cannot reach it. The description is the analyst's one-line summary, not a payload archive.
+
+Recovery: build `xdm.event.description` with `concat()` over the handful of identifying fields (vendor, action, subject, outcome), and map every other field to its own structured XDM home. Never put `_raw_log` or `to_json_string(...)` in the description. The linter flags this as WARN-039.
+
 ## Quick scan -- what each symptom tells you
 
 | Symptom in your draft | Failure mode | Action |
@@ -136,3 +155,5 @@ Recovery: before declaring a field unmapped, grep [xdm-schema.md](xdm-schema.md)
 | Long pre-flight prose, no `[MODEL:` yet | #8 rumination | Start writing the rule |
 | Discarding the draft after linter output | #9 re-drafting | Fix earliest violation only |
 | "no xdm.* path exists" after a zero anchor result | #10 anchor miss | Grep xdm-schema.md for the concept first |
+| ratio / deviation dropped as "no home" | #11 risk signal lost | Park it in xdm.alert.risks |
+| `xdm.event.description = _raw_log` / `to_json_string(...)` | #12 payload dump | Build a concat() summary; map fields to homes |

@@ -51,8 +51,80 @@ import lint_rule  # noqa: E402
 _JSON_FORMATS = {"json", "jsonl"}
 _COLUMN_FORMATS = {"kv", "csv", "tsv", "cef", "leef"}
 _POSITIONAL_FORMATS = {"syslog-3164", "syslog-5424", "unknown"}
+_SYSLOG_FORMATS = {"syslog-3164", "syslog-5424"}
 
 _DEFAULT_MIN_FREQUENCY = 3
+
+# Stage 0: the canonical RFC 3164 / 5424 envelope capture and priority
+# decode (references/syslog-envelope.md). Anchored on the PRI token, never
+# on a vendor literal; facility and severity sit in separate alter stages
+# because severity reads the facility temp (a same-stage sibling reference
+# is rejected -- ERR-024). A raw string so the regex backslashes survive.
+_SYSLOG_STAGE0 = r"""| alter
+    _pri        = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
+    _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
+    _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+| alter
+    _syslog_host = coalesce(_host_5424, _host_3164)
+| alter
+    _pri_facility = to_integer(divide(_pri, 8))
+| alter
+    _pri_severity = to_integer(subtract(_pri, multiply(_pri_facility, 8)))
+| alter
+    _pri_log_level = if(
+        _pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
+        _pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
+        _pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
+        _pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
+        _pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
+    _pri_sev_band = if(
+        _pri_severity <= 2, "Critical",
+        _pri_severity = 3,  "High",
+        _pri_severity = 4,  "Medium",
+        _pri_severity != null, "Low")"""
+
+# Envelope-derived drains. severity / log_level are seeded from the
+# priority fallback only; the author upgrades each to
+# coalesce(<payload field>, _pri_*) once the payload severity is parsed.
+_SYSLOG_DRAINS = [
+    "    xdm.observer.name = _syslog_host",
+    "    xdm.event.log_level = _pri_log_level",
+    "    xdm.alert.severity = _pri_sev_band",
+]
+_SYSLOG_ENVELOPE_TARGETS = {
+    "xdm.observer.name",
+    "xdm.event.log_level",
+    "xdm.alert.severity",
+}
+
+# Authentication-event mandatory mapping (references/authentication-mapping.md).
+# When profile_log.py flags the sample as an authentication event, the
+# scaffold pads the fields that have an official placeholder and lists the
+# rest -- the ones the doc says must come from the raw log, never a static
+# value -- as TODOs. The advisory WARN-042 then flags anything still
+# unmapped. xdm.event.type is handled by the always-present drain line
+# (set to "authentication" for an auth event), so it is not repeated here.
+_AUTH_PADDABLE = [
+    ("xdm.event.tags", "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)"),
+    ("xdm.event.operation", "XDM_CONST.OPERATION_TYPE_AUTH_LOGIN"),
+    ("xdm.auth.service", '"IDP"'),
+    ("xdm.network.ip_protocol", "XDM_CONST.IP_PROTOCOL_TCP"),
+    ("xdm.source.port", "to_integer(0)"),
+    ("xdm.target.ipv4", '""'),
+    ("xdm.target.port", "to_integer(0)"),
+]
+# Mandatory fields that cannot be padded -- the doc requires a real value
+# from the raw log. Auto-wired by the normal anchor loop when the source
+# carries them; otherwise listed as TODO and flagged by WARN-042.
+_AUTH_MUST_EXTRACT = [
+    ("xdm.source.user.upn",
+     "authenticated identity in UPN format (user@domain); story correlation key"),
+    ("xdm.source.ipv4",
+     "real client source IP from the raw log (never static, empty, or a list)"),
+    ("xdm.event.original_event_type", "raw vendor event name exactly as logged"),
+    ("xdm.event.outcome",
+     "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED, on conclusive events only"),
+]
 
 
 def _sanitise_temp(leaf: str, used: set) -> str:
@@ -97,6 +169,8 @@ def scaffold(
     min_frequency: int = _DEFAULT_MIN_FREQUENCY,
 ) -> str:
     fmt = worksheet.get("detected_format", "unknown")
+    is_syslog = fmt in _SYSLOG_FORMATS
+    is_auth = bool((worksheet.get("authentication") or {}).get("detected"))
     fields = worksheet.get("fields") or []
     schema = load_xdm_paths()
 
@@ -108,6 +182,10 @@ def scaffold(
         "xdm.observer.product",
         "xdm.event.type",
     }
+    if is_syslog:
+        # Stage 0 emits these from the envelope; a candidate must not
+        # duplicate them.
+        used_targets |= _SYSLOG_ENVELOPE_TARGETS
     extractions: List[str] = []   # (temp, expr)
     drains: List[str] = []        # rendered "xdm.path = ..." lines
     mapping_rows: List[str] = []  # MAPPED-header "src -> dst" lines
@@ -177,19 +255,60 @@ def scaffold(
 
     drains = [d for d in drains if d is not None]
 
+    if is_syslog:
+        # The envelope mappings lead the header so the reader sees the
+        # transport layer before the payload mappings.
+        mapping_rows = [
+            "//   (syslog envelope)            -> xdm.observer.name",
+            "//   (syslog priority, fallback)  -> xdm.event.log_level",
+            "//   (syslog priority, fallback)  -> xdm.alert.severity",
+        ] + mapping_rows
+
+    if is_auth:
+        # Pad the mandatory fields that have an official placeholder; the
+        # normal anchor loop above may already have mapped some from the
+        # raw log, so only fill the gaps.
+        for field, rhs in _AUTH_PADDABLE:
+            if field not in used_targets:
+                used_targets.add(field)
+                drains.append(f"    {field} = {rhs}")
+                mapping_rows.append(f"//   (auth mandatory, padded)    -> {field}")
+        # The un-paddable mandatory fields must come from the raw log.
+        # Whatever the anchor loop did not wire is listed for the author;
+        # WARN-042 reminds at lint time.
+        for field, hint in _AUTH_MUST_EXTRACT:
+            if field not in used_targets:
+                todo_rows.append(
+                    f"//   {field:<28} -- AUTH MANDATORY (map from raw): {hint}"
+                )
+
     # Assemble. Observer + event.type are always present.
-    header = _build_header(vendor, product, dataset, fmt, mapping_rows, todo_rows)
+    header = _build_header(
+        vendor, product, dataset, fmt, mapping_rows, todo_rows, is_auth
+    )
 
     body: List[str] = [f"[MODEL: dataset={dataset}]", "filter", "    _raw_log != null"]
+    if is_syslog:
+        # Stage 0 sits between the null guard and the payload extraction.
+        body.append(_SYSLOG_STAGE0)
     if extractions:
         body.append("| alter")
         body.append(",\n".join(extractions))
     body.append("| alter")
+    # For an authentication event xdm.event.type must resolve to a value
+    # containing "authentication" (mandatory marker); otherwise the
+    # author sets the normalised category by hand.
+    event_type_line = (
+        '    xdm.event.type = "authentication"' if is_auth
+        else '    xdm.event.type = "ALERT"'  # TODO: set the normalised category
+    )
     drain_lines = [
         f'    xdm.observer.vendor = "{vendor}"',
         f'    xdm.observer.product = "{product}"',
-        '    xdm.event.type = "ALERT"',  # TODO: set the normalised category
+        event_type_line,
     ]
+    if is_syslog:
+        drain_lines.extend(_SYSLOG_DRAINS)
     drain_lines.extend(drains)
     body.append(",\n".join(drain_lines))
     body.append(";")
@@ -204,6 +323,7 @@ def _build_header(
     fmt: str,
     mapping_rows: List[str],
     todo_rows: List[str],
+    is_auth: bool = False,
 ) -> str:
     lines = [
         "// SPDX-FileCopyrightText: GoCortexIO",
@@ -223,6 +343,26 @@ def _build_header(
         "//   (hardcoded)                  -> xdm.observer.product",
     ]
     lines.extend(mapping_rows)
+    if is_auth:
+        lines.append("//")
+        lines.append(
+            "// NOTE: authentication event detected -- the XDM authentication "
+            "story needs the full mandatory field set (see "
+            "references/authentication-mapping.md). Paddable fields are seeded "
+            "with the official placeholders above; review xdm.auth.service "
+            "(SP vs IDP) and xdm.event.operation (AUTH_LOGIN vs AUTH_MFA). The "
+            "AUTH MANDATORY entries below MUST be mapped from the raw log -- "
+            "the advisory WARN-042 flags any left unmapped."
+        )
+    if fmt in _SYSLOG_FORMATS:
+        lines.append("//")
+        lines.append(
+            "// NOTE: Stage 0 decodes the RFC 3164 / 5424 envelope (priority "
+            "+ host); see references/syslog-envelope.md. log_level and "
+            "severity are seeded from the priority as a FALLBACK only -- once "
+            "the payload severity is parsed, upgrade each to "
+            "coalesce(<payload field>, _pri_log_level)."
+        )
     if fmt in _POSITIONAL_FORMATS:
         lines.append(
             "//"

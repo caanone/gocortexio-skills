@@ -1,0 +1,3 @@
+"<134>Aug 11 12:34:56 fw01 acme: sev=68 connection allowed"
+"<12>1 2026-06-18T12:34:56Z fw02 sshd 2731 - - authentication failure"
+"Aug 11 09:00:00 fw03 app: relay stripped the priority token"

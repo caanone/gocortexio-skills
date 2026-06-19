@@ -1,0 +1,2 @@
+<134>Aug 11 12:34:56 fw01 cortexgrid: sev=68 zone=ot proto=modbus asset=plc-12 src=10.0.0.5 action=deny
+<131>Aug 11 12:35:10 fw01 cortexgrid: sev=20 zone=it proto=https asset=ws-09 src=10.0.0.6 action=allow

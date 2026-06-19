@@ -16,6 +16,7 @@ The data model rule reads from a `_raw` dataset and writes XDM (eXtended Data Mo
 - Unquoted dataset name. WARN-015 fires if you quote it.
 - Dataset name must end in `_raw`.
 - No `vendor` or `product` keys in the header. Those are written as XDM fields inside the rule body (`xdm.observer.vendor`, `xdm.observer.product`).
+- Vendor / product / dataset cannot be derived from the log body. Infer them from the product or API title and flag them as tenant-adjustable in the MAPPED header, naming the three exact touch-points a reviewer edits: `xdm.observer.vendor`, `xdm.observer.product`, and the `[MODEL: dataset=...]` header. Make the edit trivial -- the reviewer should not have to hunt for them.
 
 ## Stage order
 

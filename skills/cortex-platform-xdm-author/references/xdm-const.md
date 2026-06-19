@@ -232,6 +232,39 @@ XDM_CONST.OPERATION_TYPE_AUTH_MFA
 XDM_CONST.OPERATION_TYPE_AUDIT
 ```
 
+## Event tag (authentication story)
+
+`EVENT_TAG` is a broad, mostly non-enumerated group (see below). The one
+member enumerated here is the authentication-story tag, which is
+mandatory on every authentication event -- see
+[authentication-mapping.md](authentication-mapping.md). Assign it via
+`arraycreate()` because `xdm.event.tags` is an array.
+
+```
+XDM_CONST.EVENT_TAG_AUTHENTICATION
+```
+
+## Privilege level (`xdm.auth.privilege_level`)
+
+Closed list for the authentication story's normalised privilege level.
+
+```
+XDM_CONST.PRIVILEGE_LEVEL_GUEST
+XDM_CONST.PRIVILEGE_LEVEL_USER
+XDM_CONST.PRIVILEGE_LEVEL_ADMIN
+XDM_CONST.PRIVILEGE_LEVEL_SYSTEM
+```
+
+## Logon type (`xdm.logon.type`)
+
+Closed list for whether an authentication is interactive or a service
+logon.
+
+```
+XDM_CONST.LOGON_TYPE_INTERACTIVE
+XDM_CONST.LOGON_TYPE_SERVICE
+```
+
 ## Threat category (`xdm.alert.category`)
 
 Closed list. If the vendor category string does not match any constant below, OMIT `xdm.alert.category` and place the raw vendor category text in `xdm.alert.subcategory` (String type) instead.

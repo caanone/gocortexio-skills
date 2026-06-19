@@ -1,0 +1,2 @@
+{"event":"user.login","user_upn":"alice@example.com","src_ip":"10.0.0.5","src_port":51234,"dst_ip":"10.0.0.1","dst_port":443,"service":"Okta","mfa_method":"push","result":"success"}
+{"event":"user.login","user_upn":"bob@example.com","src_ip":"10.0.0.6","src_port":51999,"dst_ip":"10.0.0.1","dst_port":443,"service":"Okta","mfa_method":"totp","result":"failure"}

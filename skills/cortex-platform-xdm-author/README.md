@@ -10,7 +10,7 @@ A GoCortexIO skill bundle. Authors Palo Alto Networks Cortex XSIAM Data Model Ru
 ## Responsible use of AI
 This project provides AI Skills to enhance and extend your AI workflows. However, the availability of these skills is not an encouragement, endorsement, or guarantee of safety for uploading confidential, proprietary, or sensitive data into third-party AI platforms.
 
-This project's skills merely format or route data; the ultimate data security and compliance depend entirely on the underlying AI model or platform you choose to connect them to. In line with the Australian Signals Directorate (ASD) guidelines on [Data leaks and privacy breaches](https://www.cyber.gov.au/business-government/secure-design/artificial-intelligence/artificial-intelligence-for-small-business#data-leaks-and-privacy-breaches), uploading non-anonymised corporate or personal data into public generative AI systems risks exposing private information, as external providers may retain and reuse your inputs.
+This projects skills merely format or route data; the ultimate data security and compliance depend entirely on the underlying AI model or platform you choose to connect them to. In line with the Australian Signals Directorate (ASD) guidelines on [Data leaks and privacy breaches](https://www.cyber.gov.au/business-government/secure-design/artificial-intelligence/artificial-intelligence-for-small-business#data-leaks-and-privacy-breaches), uploading un-anonymised corporate or personal data into public generative AI systems risks exposing private information, as external providers may retain and reuse your inputs.
 
 Before deploying or experimenting with these skills in a professional setting, you must:
 

@@ -35,6 +35,18 @@ Schema-aware checks (XDM schema + XDM_CONST loaded from references):
     WARN-035 Array-typed XDM field assigned a scalar value.
     WARN-037 Log-level word (warning / error / notice / debug) echoed into
              xdm.alert.severity instead of a proper band.
+    WARN-038 Host named (host.hostname) with a known ipv4 but no
+             host.ipv4_addresses companion array.
+    WARN-039 Whole payload (_raw_log / to_json_string) dumped into
+             xdm.event.description instead of a concat() summary.
+    WARN-040 Syslog header parsed with a vendor-anchored / positional
+             regex instead of the PRI-anchored envelope idiom.
+    WARN-041 Syslog priority captured but never decoded into
+             xdm.event.log_level / xdm.alert.severity.
+    WARN-042 Auto-detected authentication event missing a field from the
+             authentication-story mandatory set (advisory, never blocks).
+    INFO-013 Advisory: one underscore temp mapped across 3+ XDM entity
+             families (likely over-mapping; event / observer excluded).
 
 Dataflow checks (reach + array-typing over the rule's temps):
 
@@ -1554,6 +1566,562 @@ def _check_warn037(code_lines: List[str]) -> List[dict]:
     return out
 
 
+# ----- WARN-038  missing host.ipv4_addresses companion
+
+
+_HOST_SIDES = ("source", "target", "intermediate")
+
+
+def _check_warn038(code_lines: List[str]) -> List[dict]:
+    """When a host is named (`xdm.<side>.host.hostname`) and its IP is known
+    (`xdm.<side>.ipv4`), the `xdm.<side>.host.ipv4_addresses` array companion
+    should be populated too, so host-based correlation can pivot on either.
+    A pure assignment-target check."""
+    if not _is_model(code_lines):
+        return []
+    targets: dict = {}
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        m = re.match(r"^\s*(xdm\.[\w.]+)\s*=(?!=)", raw.split("//", 1)[0])
+        if m:
+            targets.setdefault(m.group(1), i + 1)
+    out: List[dict] = []
+    for side in _HOST_SIDES:
+        hostname = f"xdm.{side}.host.hostname"
+        ipv4 = f"xdm.{side}.ipv4"
+        arr = f"xdm.{side}.host.ipv4_addresses"
+        if hostname in targets and ipv4 in targets and arr not in targets:
+            out.append(
+                _violation(
+                    "WARN-038",
+                    "warning",
+                    targets[hostname],
+                    f"{hostname} and {ipv4} are both set but the companion "
+                    f"{arr} is missing. The host is named and its IP is known, "
+                    "so populate the address array for host-based correlation.",
+                    f"Add {arr} = if(<ip> != null, arraycreate(<ip>), null).",
+                )
+            )
+    return out
+
+
+# ----- INFO-013  over-mapping advisory (one temp across 3+ XDM families)
+
+
+def _top_level_xdm_assignments(code_lines: List[str]) -> List[dict]:
+    """Return [{path, line, rhs}] for each top-level `xdm.* =` assignment,
+    capturing the full multi-line RHS window (paren-depth aware)."""
+    cleaned = [_strip_line_comment(ln) for ln in code_lines]
+    n = len(cleaned)
+    out: List[dict] = []
+    i = 0
+    while i < n:
+        cp = cleaned[i]
+        m = re.match(r"^\s*(xdm\.[\w.]+)\s*=(?!=)", cp)
+        if m:
+            window = [i]
+            depth = _depth_delta(cp)
+            j = i + 1
+            while j < n:
+                c2 = cleaned[j]
+                if not c2.strip():
+                    j += 1
+                    continue
+                if depth <= 0 and (
+                    _ANY_ASSIGN_START.match(c2)
+                    or c2.lstrip().startswith("|")
+                    or c2.strip() == ";"
+                ):
+                    break
+                window.append(j)
+                depth += _depth_delta(c2)
+                j += 1
+            rhs = "\n".join(cleaned[k] for k in window)
+            rhs = re.sub(r"^\s*xdm\.[\w.]+\s*=", "", rhs, count=1)
+            out.append({"path": m.group(1), "line": i + 1, "rhs": rhs})
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _check_info013(code_lines: List[str]) -> List[dict]:
+    """A single underscore temp consumed by xdm.* assignments across 3+
+    distinct top-level XDM categories is usually over-mapping (forcing one
+    value into unrelated field families). Advisory only -- the documented
+    source<->target mirror (two categories) is excluded."""
+    if not _is_model(code_lines):
+        return []
+    # `event` and `observer` are metadata sinks, not entity families:
+    # xdm.event.description legitimately summarises many temps, and the
+    # observer is the device, so neither counts toward over-mapping.
+    metadata_cats = {"event", "observer"}
+    temp_cats: dict = {}
+    temp_line: dict = {}
+    for a in _top_level_xdm_assignments(code_lines):
+        parts = a["path"].split(".")
+        cat = parts[1] if len(parts) > 1 else a["path"]
+        if cat in metadata_cats:
+            continue
+        for m in _USCORE_TOKEN.finditer(a["rhs"]):
+            name = m.group(1)
+            temp_cats.setdefault(name, set()).add(cat)
+            temp_line.setdefault(name, a["line"])
+    out: List[dict] = []
+    for name in sorted(temp_cats, key=lambda nm: temp_line[nm]):
+        cats = temp_cats[name]
+        if len(cats) >= 3 and cats != {"source", "target"}:
+            cat_list = ", ".join("xdm." + c for c in sorted(cats))
+            out.append(
+                _violation(
+                    "INFO-013",
+                    "info",
+                    temp_line[name],
+                    f"Temp '{name}' is mapped across {len(cats)} XDM categories "
+                    f"({cat_list}). Spreading one value over unrelated field "
+                    "families is usually over-mapping -- confirm each target "
+                    "genuinely holds this value.",
+                    "Map the value only to the fields it truly belongs to. The "
+                    "source <-> target mirror (two categories) is the one "
+                    "routine multi-family case.",
+                )
+            )
+    return out
+
+
+# ----- WARN-039  raw payload dumped into xdm.event.description
+
+
+def _check_warn039(code_lines: List[str]) -> List[dict]:
+    """xdm.event.description is the analyst summary, not a payload sink.
+    Assigning the whole ingested payload to it -- via `_raw_log` or by
+    serialising an object with `to_json_string(...)` -- buries data that
+    belongs in structured fields and defeats structured search. A correct
+    description is a concat() over scalar temps and touches neither."""
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    for a in _top_level_xdm_assignments(code_lines):
+        if a["path"] != "xdm.event.description":
+            continue
+        rhs = a["rhs"]
+        if re.search(r"(?<![A-Za-z0-9_])_raw_log(?![A-Za-z0-9_])", rhs):
+            trigger = "_raw_log"
+        elif re.search(r"\bto_json_string\s*\(", rhs):
+            trigger = "to_json_string(...)"
+        else:
+            continue
+        out.append(
+            _violation(
+                "WARN-039",
+                "warning",
+                a["line"],
+                f"xdm.event.description is assigned the whole payload via "
+                f"{trigger}. The description is the analyst summary, not a "
+                "payload sink -- dumping the raw log there buries data that "
+                "belongs in structured fields and defeats structured search.",
+                "Build the description with concat() over the identifying "
+                "scalar fields, and map the rest of the payload to their own "
+                "structured XDM homes. Never put _raw_log or to_json_string() "
+                "in the description.",
+            )
+        )
+    return out
+
+
+# ----- WARN-040 / WARN-041  syslog envelope discipline
+
+
+# A regextract(_raw_log, "PATTERN") call; group(1) is the raw pattern text
+# with backslashes preserved. Header patterns sit on one physical line.
+_REGEXTRACT_RAW_RE = re.compile(
+    r'regextract\s*\(\s*_raw_log\s*,\s*"((?:\\.|[^"\\])*)"'
+)
+
+# A syslog positional timestamp header expressed as a regex: a month-name
+# or RFC 5424 version token, a day number, then a clock. Matched against
+# the pattern TEXT, so the metacharacters appear as literal backslash
+# sequences. Tolerant of the common spellings ([A-Za-z]{3} or \w{3};
+# \d+ or \d{1,2}; [\d:]+ or \d\d:\d\d).
+_SYSLOG_HDR_SIG = re.compile(
+    r"(?:\[A-Za-z\]\{3\}|\\w\{3\}|>\\w\+)"  # month name / 5424 version token
+    r".{0,12}?\\d"                          # a day digit soon after
+    r".{0,18}?"
+    r"(?:\[\\d:\]|\\d\{1,2\}:\\d|\\d\\d:\\d|:\\d\{2\})"  # a clock fragment
+)
+
+# The PRI-capturing regextract is the only canonical pattern that opens a
+# capture group immediately after the priority token: ^<(\d{1,3})>.
+_PRI_CAPTURE_PREFIX = "^<("
+
+
+def _check_warn040(code_lines: List[str]) -> List[dict]:
+    """A syslog header parsed with a vendor-anchored or positional regex
+    instead of the PRI-anchored envelope idiom. Fires when a
+    regextract(_raw_log, ...) pattern carries a syslog timestamp-header
+    signature but is not anchored on the priority token (^<...). The
+    canonical idiom in references/syslog-envelope.md always anchors on
+    ^<\\d{1,3}>, so it is never flagged."""
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        for m in _REGEXTRACT_RAW_RE.finditer(cp):
+            pat = m.group(1)
+            if pat.startswith("^<"):
+                continue
+            if not _SYSLOG_HDR_SIG.search(pat):
+                continue
+            out.append(
+                _violation(
+                    "WARN-040",
+                    "warning",
+                    i + 1,
+                    "Syslog header parsed with a vendor-anchored or "
+                    "positional regex. The header layout shifts between "
+                    "sources, so this breaks on the next vendor and "
+                    "discards the priority value entirely.",
+                    "Anchor on the priority token instead: capture the host "
+                    "with the RFC 3164 + RFC 5424 coalesce keyed on "
+                    "^<\\d{1,3}> -- see references/syslog-envelope.md.",
+                )
+            )
+    return out
+
+
+def _check_warn041(code_lines: List[str]) -> List[dict]:
+    """The syslog priority is captured but never decoded. Fires when a
+    regextract anchors and captures the PRI (^<(\\d...)) yet the rule
+    assigns neither xdm.event.log_level nor xdm.alert.severity anywhere.
+    The priority is the one severity signal every syslog record carries;
+    capturing it and dropping its severity wastes that floor."""
+    if not _is_model(code_lines):
+        return []
+    pri_line = None
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        for m in _REGEXTRACT_RAW_RE.finditer(cp):
+            if m.group(1).startswith(_PRI_CAPTURE_PREFIX):
+                pri_line = i + 1
+                break
+        if pri_line is not None:
+            break
+    if pri_line is None:
+        return []
+    for raw in code_lines:
+        cp = _strip_line_comment(raw)
+        if re.match(
+            r"\s*(?:xdm\.event\.log_level|xdm\.alert\.severity)\s*=(?!=)", cp
+        ):
+            return []
+    return [
+        _violation(
+            "WARN-041",
+            "warning",
+            pri_line,
+            "The syslog priority is captured but never decoded into "
+            "xdm.event.log_level or xdm.alert.severity. The priority is the "
+            "one severity signal every syslog record carries, so capturing "
+            "it and dropping its severity loses that floor.",
+            "Decode the priority (facility = PRI div 8, severity = PRI mod "
+            "8) and use it as the fallback: coalesce(<payload severity>, "
+            "_pri_sev_band) -- see references/syslog-envelope.md.",
+        )
+    ]
+
+
+# ----- WARN-042  authentication-story mandatory mapping (auto-detected)
+
+
+_AUTH_MANDATORY = [
+    "xdm.source.ipv4",
+    "xdm.source.port",
+    "xdm.target.ipv4",
+    "xdm.target.port",
+    "xdm.network.ip_protocol",
+    "xdm.event.type",
+    "xdm.event.tags",
+    "xdm.event.operation",
+    "xdm.event.original_event_type",
+    "xdm.event.outcome",
+    "xdm.auth.service",
+    "xdm.source.user.upn",
+]
+
+_AUTH_FIELD_HINT = {
+    "xdm.source.ipv4": "map the real client address from the raw log "
+    "(never a static value, list, or empty string)",
+    "xdm.source.port": "map the value, else xdm.source.port = to_integer(0)",
+    "xdm.target.ipv4": 'map the value, else xdm.target.ipv4 = "" '
+    "(string here, never a list)",
+    "xdm.target.port": "map the value, else xdm.target.port = to_integer(0)",
+    "xdm.network.ip_protocol": "assign XDM_CONST.IP_PROTOCOL_* "
+    "(IP_PROTOCOL_TCP for interactive auth)",
+    "xdm.event.type": 'resolve to a value containing "authentication"',
+    "xdm.event.tags": "xdm.event.tags = "
+    "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)",
+    "xdm.event.operation": "XDM_CONST.OPERATION_TYPE_AUTH_LOGIN "
+    "(password) or OPERATION_TYPE_AUTH_MFA (involves MFA)",
+    "xdm.event.original_event_type": "carry the raw vendor event name",
+    "xdm.event.outcome": "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED only, "
+    "on conclusive events",
+    "xdm.auth.service": 'name the role in the flow: "SP" or "IDP"',
+    "xdm.source.user.upn": "the authenticated identity in UPN format "
+    "(the authentication-story correlation key)",
+}
+
+_AUTH_OPERATION_RE = re.compile(r"OPERATION_TYPE_AUTH_\w+")
+
+# Broader event-signal vocabulary, mirroring profile_log.py's
+# _AUTH_VALUE_RE. A rule can model an authentication event without ever
+# using an explicit XDM auth marker (EVENT_TAG_AUTHENTICATION,
+# OPERATION_TYPE_AUTH_*, or the word "authentication" in event.type) --
+# e.g. xdm.event.original_event_type = "user.login". When an
+# event-classification field carries such a literal, WARN-042 must still
+# classify the rule as authentication so the mandatory-field checklist
+# applies. Word-ish boundaries (allowing a leading "_"/"-"/".") keep the
+# tokens from matching inside unrelated words while still firing on
+# "user.login" and "ssh_user_login".
+_AUTH_LITERAL_RE = re.compile(
+    r"(?<![a-z0-9])("
+    r"logon|logoff|login|logout|logged[ _-]?in|logged[ _-]?out|"
+    r"sign[ _-]?in|sign[ _-]?on|signin|signon|"
+    r"authentication|authenticated|"
+    r"mfa|multi-factor|two-factor|2fa|otp|sso|saml|kerberos|"
+    r"password|credential"
+    r")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+# The event-classification fields whose literal values carry event
+# semantics. Only these are scanned for the broader auth literal signal,
+# to keep classification conservative (an auth token in, say, a hostname
+# or username field must not flip a rule to "authentication").
+_AUTH_SIGNAL_FIELDS = (
+    "xdm.event.type",
+    "xdm.event.original_event_type",
+    "xdm.event.operation",
+)
+
+# Value-conformance vocabularies. A mandatory authentication field that is
+# present but assigned a value the authentication story forbids is as
+# damaging as leaving it unmapped, so WARN-042 also checks the value when
+# it can do so with certainty.
+_AUTH_ANY_OPERATION_RE = re.compile(r"OPERATION_TYPE_[A-Z_]+")
+_AUTH_OUTCOME_RE = re.compile(r"OUTCOME_[A-Z_]+")
+_AUTH_OUTCOME_OK = {"OUTCOME_SUCCESS", "OUTCOME_FAILED"}
+_AUTH_SERVICE_OK = {"SP", "IDP"}
+
+
+def _rhs_has_dynamic(rhs: str) -> bool:
+    """True when the RHS can resolve to a value the linter cannot see
+    statically: a temp reference, an xdm.* read, an XDM_CONST.*, or any
+    function call. Used to suppress value-conformance flags on anything
+    that is not a self-contained literal -- the linter must never guess a
+    temp's or expression's runtime value."""
+    if "XDM_CONST." in rhs:
+        return True
+    if re.search(r"[A-Za-z_]\w*\s*\(", rhs):  # function call e.g. if(, concat(
+        return True
+    if re.search(r"(?<![\w.])_[A-Za-z]\w*", rhs):  # temp reference
+        return True
+    if re.search(r"\bxdm\.", rhs):  # reads another xdm field
+        return True
+    return False
+
+
+def _rhs_is_static_literal(rhs: str) -> bool:
+    """True only when the RHS is a self-contained static literal: a single
+    quoted string (including the empty string) or a bare number. A bare
+    identifier is a raw-column reference, not a literal, so it returns
+    False -- the linter must never mistake a direct-column mapping
+    (xdm.source.ipv4 = src_ip) for a hard-coded value."""
+    body = rhs.strip().rstrip(",").strip()
+    if not body:
+        return False
+    if re.fullmatch(r'"[^"]*"', body):
+        return True
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", body):
+        return True
+    return False
+
+
+def _auth_value_issues(path: str, rhs: str) -> List[tuple]:
+    """Return [(message, suggestion)] for a mapped mandatory auth field
+    whose value violates the closed vocabulary the authentication story
+    demands. Conservative on purpose: only a definitively wrong,
+    self-contained literal is flagged. Anything sourced from a temp, an
+    xdm read, an XDM_CONST expression, or a function call is left alone so
+    that legitimate runtime-resolved mappings never false-fire."""
+    issues: List[tuple] = []
+    lits = re.findall(r'"([^"]*)"', rhs)
+
+    if path == "xdm.source.ipv4":
+        if _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.source.ipv4 is assigned a static literal. The source "
+                "address must be mapped from the raw log (never a static "
+                "value, list, or empty string), or the authentication "
+                "story cannot correlate the client.",
+                "Map the real client address from the raw log.",
+            ))
+    elif path == "xdm.target.ipv4":
+        if "arraycreate(" in rhs or re.match(r"\s*\[", rhs):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.target.ipv4 is assigned a list. This field is a single "
+                "string, not an array.",
+                'Map a single value, else xdm.target.ipv4 = "".',
+            ))
+    elif path == "xdm.network.ip_protocol":
+        if "IP_PROTOCOL_" not in rhs and _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.network.ip_protocol is assigned a raw literal instead "
+                "of the XDM enum.",
+                "Assign XDM_CONST.IP_PROTOCOL_* "
+                "(IP_PROTOCOL_TCP for interactive auth).",
+            ))
+    elif path == "xdm.event.type":
+        if lits and not _rhs_has_dynamic(rhs) and not any(
+            "authentication" in s.lower() for s in lits
+        ):
+            issues.append((
+                "This rule models an authentication event, but "
+                'xdm.event.type does not resolve to a value containing '
+                '"authentication", which the authentication story keys on.',
+                'Resolve xdm.event.type to a value containing '
+                '"authentication".',
+            ))
+    elif path == "xdm.event.tags":
+        if "EVENT_TAG_" in rhs and "EVENT_TAG_AUTHENTICATION" not in rhs:
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.event.tags enumerates tag constants without "
+                "XDM_CONST.EVENT_TAG_AUTHENTICATION, the story marker tag.",
+                "xdm.event.tags = "
+                "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION).",
+            ))
+    elif path == "xdm.event.operation":
+        ops = _AUTH_ANY_OPERATION_RE.findall(rhs)
+        if ops and not any(o.startswith("OPERATION_TYPE_AUTH") for o in ops):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.event.operation is a non-authentication operation.",
+                "Use XDM_CONST.OPERATION_TYPE_AUTH_LOGIN (password) or "
+                "OPERATION_TYPE_AUTH_MFA (involves MFA).",
+            ))
+    elif path == "xdm.event.outcome":
+        bad = sorted(
+            {o for o in _AUTH_OUTCOME_RE.findall(rhs) if o not in _AUTH_OUTCOME_OK}
+        )
+        if bad:
+            issues.append((
+                "This rule models an authentication event, but "
+                f"xdm.event.outcome uses {', '.join(bad)}. The "
+                "authentication story supports OUTCOME_SUCCESS / "
+                "OUTCOME_FAILED only.",
+                "Use XDM_CONST.OUTCOME_SUCCESS or OUTCOME_FAILED, on "
+                "conclusive events only.",
+            ))
+    elif path == "xdm.auth.service":
+        if lits and not _rhs_has_dynamic(rhs) and not any(
+            s in _AUTH_SERVICE_OK for s in lits
+        ):
+            issues.append((
+                "This rule models an authentication event, but "
+                'xdm.auth.service is not "SP" or "IDP".',
+                'Name the role in the flow: "SP" (initiates) or "IDP" '
+                "(validates).",
+            ))
+    return issues
+
+
+def _check_warn042(code_lines: List[str]) -> List[dict]:
+    """Auto-detect an authentication event and warn (never block) when a
+    field in the authoritative authentication-story mandatory set is not
+    mapped. A rule is treated as an authentication rule when it carries a
+    definitive auth marker -- the EVENT_TAG_AUTHENTICATION tag on
+    xdm.event.tags, an OPERATION_TYPE_AUTH_* operation on
+    xdm.event.operation, or an xdm.event.type value containing
+    "authentication" -- OR a broader auth literal (login, logon, signin,
+    mfa, sso, ...) in an event-classification field such as
+    xdm.event.original_event_type = "user.login", so a rule that models
+    authentication without ever using an explicit XDM marker is still
+    classified. When a marker is found, every missing mandatory field is
+    reported at the marker line,
+    and every mapped mandatory field whose value violates the closed
+    vocabulary the authentication story demands (the wrong const, a static
+    source address, a list where a string is required, and so on) is
+    reported at its own line. Advisory only (warning severity), so the
+    exit code stays 0. Value conformance is conservative: only a
+    definitively wrong, self-contained literal is flagged -- temps, xdm
+    reads and const expressions are never second-guessed. See
+    references/authentication-mapping.md."""
+    if not _is_model(code_lines):
+        return []
+    assigns = _top_level_xdm_assignments(code_lines)
+    targets = {a["path"]: a["line"] for a in assigns}
+    rhs_by_path = {a["path"]: a["rhs"] for a in assigns}
+    marker_line = None
+    for a in assigns:
+        path, rhs = a["path"], a["rhs"]
+        if path == "xdm.event.tags" and "EVENT_TAG_AUTHENTICATION" in rhs:
+            marker_line = a["line"]
+            break
+        if path == "xdm.event.operation" and _AUTH_OPERATION_RE.search(rhs):
+            marker_line = a["line"]
+            break
+        if path == "xdm.event.type" and "authentication" in rhs.lower():
+            marker_line = a["line"]
+            break
+        # Broader event signal: an auth literal in an event-classification
+        # field (e.g. xdm.event.original_event_type = "user.login") models
+        # an authentication event even without an explicit XDM auth marker.
+        if path in _AUTH_SIGNAL_FIELDS:
+            if any(_AUTH_LITERAL_RE.search(lit) for lit in re.findall(r'"([^"]*)"', rhs)):
+                marker_line = a["line"]
+                break
+    if marker_line is None:
+        return []
+    out: List[dict] = []
+    for field in _AUTH_MANDATORY:
+        if field in targets:
+            continue
+        out.append(
+            _violation(
+                "WARN-042",
+                "warning",
+                marker_line,
+                f"This rule models an authentication event, so {field} is "
+                "mandatory for the XDM authentication story but is not "
+                "mapped. A mandatory field left unmapped drops the event "
+                "from the story and from identity analytics.",
+                f"Map {field}: {_AUTH_FIELD_HINT[field]} "
+                "(see references/authentication-mapping.md).",
+            )
+        )
+    # Value conformance: a mandatory field that is mapped but carries a
+    # forbidden value is as damaging as one left unmapped.
+    for field in _AUTH_MANDATORY:
+        if field not in rhs_by_path:
+            continue
+        for msg, fix in _auth_value_issues(field, rhs_by_path[field]):
+            out.append(
+                _violation(
+                    "WARN-042",
+                    "warning",
+                    targets[field],
+                    f"{msg} (see references/authentication-mapping.md).",
+                    fix,
+                )
+            )
+    return out
+
+
 # --------------------------------------------------------------------
 # INFO-012  Cascade root-cause hint
 # --------------------------------------------------------------------
@@ -1661,6 +2229,12 @@ def lint(source: str) -> List[dict]:
     findings += _check_warn018(code_lines)
     findings += _check_warn035(code_lines, df)
     findings += _check_warn037(code_lines)
+    findings += _check_warn038(code_lines)
+    findings += _check_warn039(code_lines)
+    findings += _check_warn040(code_lines)
+    findings += _check_warn041(code_lines)
+    findings += _check_warn042(code_lines)
+    findings += _check_info013(code_lines)
 
     findings.sort(key=lambda v: (v["line"], v["rule_id"]))
     findings += _cascade_hint(findings)

@@ -91,6 +91,13 @@ EXPECTED_TOP_CANDIDATES = {
     "dpt": "xdm.target.port",
     "spt": "xdm.source.port",
     "username": "xdm.source.user.username",
+    # The UPN identity key resolves to xdm.source.user.upn, not the
+    # display-name username -- the authentication-story correlation key
+    # (see references/authentication-mapping.md). Curated in
+    # field_anchors.json; this pins it against corpus re-cuts.
+    "upn": "xdm.source.user.upn",
+    "userPrincipalName": "xdm.source.user.upn",
+    "user_principal_name": "xdm.source.user.upn",
     "useragent": "xdm.source.user_agent",
     "hostname": "xdm.source.host.hostname",
     "src_port": "xdm.source.port",

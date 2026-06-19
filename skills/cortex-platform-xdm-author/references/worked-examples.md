@@ -18,6 +18,7 @@ The final XQL in each walkthrough is a complete, validated rule reproduced verba
 | 3 | [03-extrahop-revealx-pattern-d-prime.md](worked-examples/03-extrahop-revealx-pattern-d-prime.md) | ExtraHop RevealX / `extrahop_revealx_raw` | D' (role-filtered array of objects) | Hardest pattern: `participants[]` projected per-scalar, banded scoring, MITRE constant mapping, `-> []` JSON-string cast. |
 | 4 | [04-trend-micro-vision-one-pattern-d.md](worked-examples/04-trend-micro-vision-one-pattern-d.md) | Trend Micro Vision One / `trendmicro_visionone_raw` | D (arrow operator on pre-parsed top-level columns; `_raw_log` is null) | `processChainInfo[0]` JSON re-extraction, `filters[]` projection, self-sufficient derivation of `_source` / `_severity_band` from raw. |
 | 5 | [05-imperva-audit-trail-pattern-a.md](worked-examples/05-imperva-audit-trail-pattern-a.md) | Imperva Audit Trail / `imperva_audit_trail_raw` | A (`json_extract_scalar` on a top-level JSON-string column) | Smallest rule (~92 LOC). Pure `json_extract_scalar(to_string(<column>), "$.path")` idiom. |
+| 6 | [06-okta-authentication-multi-format.md](worked-examples/06-okta-authentication-multi-format.md) | Okta / Identity Cloud | A (JSON) and B (RFC 5424 syslog) | One authentication event in two wire formats. Mandatory 12-field authentication-story mapping (WARN-042); extraction differs, XDM assignment is identical. |
 
 ## Each walkthrough follows the same structure
 

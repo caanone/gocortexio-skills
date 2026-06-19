@@ -357,5 +357,63 @@ class TestPatternRecommendation(unittest.TestCase):
         self.assertIn("B --", cp.stdout)
 
 
+class TestAuthenticationDetection(unittest.TestCase):
+    """The profiler auto-detects authentication events from field names
+    and sample values, and surfaces the mandatory mapping checklist."""
+
+    def test_detects_auth_event_fixture(self) -> None:
+        ws = _profile_fixture("auth_event.jsonl")
+        auth = ws["authentication"]
+        self.assertTrue(auth["detected"], auth)
+        self.assertEqual(len(auth["mandatory_fields"]), 12)
+        self.assertIn("xdm.source.user.upn", auth["mandatory_fields"])
+        self.assertTrue(auth["signals"], "expected at least one signal")
+
+    def test_silent_on_non_auth_sample(self) -> None:
+        ws = profile("bytes.jsonl", '{"src_ip":"1.1.1.1","bytes":5}\n')
+        self.assertFalse(ws["authentication"]["detected"])
+        self.assertEqual(ws["authentication"]["signals"], [])
+
+    def test_does_not_false_match_author_field(self) -> None:
+        ws = profile("doc.jsonl", '{"author":"jane","title":"report"}\n')
+        self.assertFalse(ws["authentication"]["detected"])
+
+    def test_detection_in_text_output(self) -> None:
+        cp = subprocess.run(
+            [sys.executable, str(PROFILE_SCRIPT),
+             str(FIXTURES / "auth_event.jsonl"), "--format", "text"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertIn("authentication:", cp.stdout)
+
+    def test_detects_auth_buried_in_positional_syslog(self) -> None:
+        # Positional syslog collapses every line into a single _message
+        # field. In this Nokia 7705 SAR sample the first records are
+        # non-auth (tacplus status, MAF filter match, cli_user_io); the
+        # authentication lines are a minority buried later. A
+        # first-record-only scan would miss them -- the value scan must
+        # walk every record.
+        ws = _profile_fixture("nokia_syslog_auth.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        auth = ws["authentication"]
+        self.assertTrue(auth["detected"], auth)
+        self.assertEqual(len(auth["mandatory_fields"]), 12)
+        value_signals = [s for s in auth["signals"] if s["kind"] == "value"]
+        self.assertTrue(value_signals, auth["signals"])
+        self.assertTrue(
+            all(s["field"] == "_message" for s in value_signals), auth["signals"]
+        )
+
+    def test_silent_on_positional_syslog_without_auth(self) -> None:
+        # The same wrapper carrying only non-auth events (tacplus status,
+        # MAF filter match, cli_user_io) must not false-fire now that the
+        # value scan walks every record.
+        ws = _profile_fixture("nokia_syslog_noauth.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        self.assertFalse(ws["authentication"]["detected"], ws["authentication"])
+        self.assertEqual(ws["authentication"]["signals"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

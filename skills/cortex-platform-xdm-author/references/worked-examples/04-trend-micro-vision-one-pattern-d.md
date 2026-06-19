@@ -325,6 +325,7 @@ filter
     xdm.source.process.integrity_level = effective_integrity_level,
 
     xdm.target.ipv4 = effective_target_ipv4,
+    xdm.target.host.ipv4_addresses = if(effective_target_ipv4 != null, arraycreate(effective_target_ipv4), null),
     xdm.target.port = dest_port,
     xdm.target.host.hostname = dest_host,
     xdm.target.file.filename = object_file_name,

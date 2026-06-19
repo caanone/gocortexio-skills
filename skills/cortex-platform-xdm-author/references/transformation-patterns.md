@@ -145,6 +145,37 @@ If no matching constant exists for the default case, omit the default branch so 
 
 If unsure which constant to use, OMIT the field entirely. See [pitfall-traps.md](pitfall-traps.md) for the OMIT-and-fall-back rule.
 
+## Event outcome -- only for a real result, not a detection disposition
+
+`xdm.event.outcome` records whether an action succeeded or failed. A detection / IDS / anomaly disposition verb -- `alert`, `monitor`, `investigate`, `isolate` -- is NOT an outcome: the detection fired, it did not "succeed" or "fail". Leave `xdm.event.outcome` UNSET for a pure detection, and keep the disposition verb in `xdm.observer.action`.
+
+```
+// WRONG -- a disposition forced into outcome
+xdm.event.outcome = if(
+    _action = "isolate", XDM_CONST.OUTCOME_FAILED,
+    _action != null,     XDM_CONST.OUTCOME_PARTIAL)
+
+// RIGHT -- keep the verb in observer.action; omit outcome
+xdm.observer.action = _action
+// xdm.event.outcome intentionally not set: a detection has no success / failure.
+// Set it only when the log reports a real result, e.g. a permit / block decision:
+xdm.event.outcome = if(
+    _status = "blocked",   XDM_CONST.OUTCOME_FAILED,
+    _status = "permitted", XDM_CONST.OUTCOME_SUCCESS)
+```
+
+## Risk and deviation metrics -> xdm.alert.risks
+
+A numeric ratio, deviation, or score with no typed numeric XDM home -- e.g. `metrics.baseline_deviation`, an anomaly multiplier, a confidence ratio -- is NOT homeless. Park it in `xdm.alert.risks` (String) as free text, alongside the raw `risk_score`, so the risk signal is preserved for the analyst:
+
+```
+xdm.alert.risks = concat(
+    "risk_score=", _risk_score,
+    if(_baseline_deviation != null, concat(" baseline_deviation=", _baseline_deviation), ""))
+```
+
+Dropping such a metric is a choice, not a necessity. When you do drop one, record it in the NOT MAPPED block as "intentionally omitted" with a reason -- never as "no XDM home", which is false for any value that fits the `xdm.alert.risks` String sink.
+
 ## Banded numeric scoring (mandatory for `score` fields)
 
 If a vendor source field name contains `"score"` (e.g. `risk_score`, `riskScore`, `threat_score`, `severity_score`, `confidence_score`, `alert_score`) OR is otherwise a numeric severity scale (0-100, 0-10, 1-5), you MUST apply banded scoring: an `if`-chain mapping thresholds to `"Critical"` / `"High"` / `"Medium"` / `"Low"` for `xdm.alert.severity` AND a parallel `XDM_CONST.LOG_LEVEL_*` `if`-chain into `xdm.event.log_level`.
@@ -165,6 +196,24 @@ xdm.event.log_level = if(
 NEVER assign the raw score via `to_string()` or as a number to `xdm.alert.severity`. `xdm.alert.severity` is a categorical String field; an unbanded number-string is a silent regression that the linter cannot catch.
 
 This rule does NOT apply to non-numeric severity columns (already-banded labels like `"low"` / `"medium"` / `"high"` use case-normalisation instead -- see "Severity normalisation" below).
+
+### Reading bands from a vendor prose table
+
+When the log description supplies a numeric severity scale and a band table (for example "1-25 Low, 26-50 Moderate, 51-75 High, 76-100 Critical"), read the thresholds from the prose and use them. Normalise vendor band labels to the closed XDM set -- `Critical` / `High` / `Medium` / `Low` -- so a vendor `"Moderate"` becomes XDM `"Medium"`. Coerce the numeric severity with `to_integer(to_number(...))` (ERR-015) and floor to a band; never echo the raw number.
+
+```
+_sev = to_integer(to_number(_sev_str)),
+xdm.alert.severity = if(
+    _sev >= 76, "Critical",
+    _sev >= 51, "High",
+    _sev >= 26, "Medium",                 // vendor "Moderate" -> XDM "Medium"
+    _sev != null, "Low"),                 // floor to a band, never the raw number
+xdm.event.log_level = if(
+    _sev >= 76, XDM_CONST.LOG_LEVEL_CRITICAL,
+    _sev >= 51, XDM_CONST.LOG_LEVEL_ERROR,
+    _sev >= 26, XDM_CONST.LOG_LEVEL_WARNING,
+    _sev != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
+```
 
 ## Severity normalisation (for already-banded labels)
 
@@ -354,16 +403,18 @@ Authentication logs have dedicated structured homes under `xdm.auth.*`. These fi
 | `is_mfa_needed`, `mfa_required` | `xdm.auth.is_mfa_needed` (Boolean -- wrap with `to_boolean(...)`) |
 | `auth_method`, `authentication_method` | `xdm.auth.auth_method` (String) |
 
-Companion classification: when the log is an authentication event, set `xdm.event.operation` alongside `xdm.event.type = "AUTH"`. Use `XDM_CONST.OPERATION_TYPE_AUTH_MFA` when the event involves MFA, otherwise `XDM_CONST.OPERATION_TYPE_AUTH_LOGIN`:
+Companion classification: when the log is an authentication event, set `xdm.event.operation` alongside `xdm.event.type`. For the authentication story `xdm.event.type` must resolve to a value containing `authentication` (not the short `"AUTH"` label used for non-story event classification). Use `XDM_CONST.OPERATION_TYPE_AUTH_MFA` when the event involves MFA, otherwise `XDM_CONST.OPERATION_TYPE_AUTH_LOGIN`:
 
 ```
-xdm.event.type = "AUTH",
+xdm.event.type = "authentication",
 xdm.event.operation = if(
     _mfa_method != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA,
     XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
 xdm.auth.mfa.method = _mfa_method,
 xdm.auth.is_mfa_needed = to_boolean(_mfa_required)
 ```
+
+An authentication event has a fixed mandatory XDM field set (12 fields) that the authentication story depends on. Map the full set per [authentication-mapping.md](authentication-mapping.md); the linter raises the advisory WARN-042 for each mandatory field an auto-detected authentication rule leaves unmapped.
 
 Never bury `mfa_method` (or device / OS detail) in `xdm.event.description` -- these values have structured homes, and a description-only copy is invisible to downstream queries. The description summarises; it never substitutes (see "Structured event description" below).
 
@@ -382,6 +433,8 @@ xdm.event.description = concat(
 ```
 
 Remember idiom (xii): variables whose only consumer is inside a `concat()` body do NOT count toward reach. Inline the derivation directly, or drain through a bareword identity assignment first.
+
+Never dump the whole payload into the description. `xdm.event.description = _raw_log`, `= to_string(_raw_log)`, or `= to_json_string(<object>)` defeats the point: it buries every field in free text where structured queries cannot reach it. The description is a concat() of the fields that matter; everything else goes to its own structured XDM home. The linter flags this as WARN-039.
 
 ## No duplicate assignments
 

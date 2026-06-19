@@ -48,6 +48,8 @@ data is in label / value array pairs                  -> Pattern C
 
 Full pattern definitions and worked examples in [extraction-patterns.md](extraction-patterns.md). Critical: `json_extract_scalar` on a null `_raw_log` returns null for EVERY field. If `_raw_log` is null, use Pattern D.
 
+For a syslog source (`_raw_log` opens with a `<NNN>` priority token, `detected_format` of `syslog-3164` or `syslog-5424`), insert Stage 0 before the payload parse: capture the host with the PRI-anchored RFC 3164 + 5424 coalesce, decode the priority into facility / severity, and seed `xdm.observer.name`, `xdm.event.log_level`, and `xdm.alert.severity` from it as a fallback. The idiom is identical for every syslog vendor -- see [syslog-envelope.md](syslog-envelope.md). Then apply Pattern B to the payload body.
+
 ## Step 4 -- Look up XDM targets via the field-anchor index
 
 For each distinct vendor field name, query the shipped field-anchor index:
@@ -82,7 +84,7 @@ The JSON is human-readable; each anchor block lists every synonym that has histo
 Assign in this priority order:
 
 1. Observer: `xdm.observer.vendor` and `xdm.observer.product` (hardcoded strings).
-2. Event classification: `xdm.event.type` -- normalised category: `"ALERT"`, `"NETWORK"`, `"AUTH"`, `"EMAIL"`, `"FILE"`, `"PROCESS"`, `"ENDPOINT_ACTIVITY"`, `"AUDIT"`. Then `xdm.event.id`, `xdm.event.original_event_type`, `xdm.event.description`, `xdm.event.outcome`, and `xdm.event.operation` (`XDM_CONST.OPERATION_TYPE_*` -- e.g. `OPERATION_TYPE_AUTH_MFA` / `OPERATION_TYPE_AUTH_LOGIN` for AUTH events, `OPERATION_TYPE_AUDIT` for audit trails; omit only when no constant fits).
+2. Event classification: `xdm.event.type` -- normalised category: `"ALERT"`, `"NETWORK"`, `"authentication"`, `"EMAIL"`, `"FILE"`, `"PROCESS"`, `"ENDPOINT_ACTIVITY"`, `"AUDIT"`. Then `xdm.event.id`, `xdm.event.original_event_type`, `xdm.event.description`, `xdm.event.outcome`, and `xdm.event.operation` (`XDM_CONST.OPERATION_TYPE_*` -- e.g. `OPERATION_TYPE_AUTH_MFA` / `OPERATION_TYPE_AUTH_LOGIN` for authentication events, `OPERATION_TYPE_AUDIT` for audit trails; omit only when no constant fits). For login / logon / sign-in / MFA / SSO events, `xdm.event.type` must resolve to a value that contains `authentication` (not `"AUTH"`); this is the discriminator the authentication story keys on.
 3. Source and target identities: IPs, hostnames, ports, users.
 4. Domain-specific: `xdm.alert.`, `xdm.email.`, `xdm.network.*`, `xdm.auth.*`.
 5. Intermediate fields: for proxy / gateway devices between source and target.
@@ -95,6 +97,7 @@ Apply transformation patterns from [transformation-patterns.md](transformation-p
 - Banded scoring -- vendor field names containing `"score"` or numeric severity scales (0-100, 0-10, 1-5) MUST use banded thresholds.
 - Categorical enum routing -- vendor `categories[]` arrays MUST first attempt `xdm.alert.category` via THREAT_CATEGORY constants before falling back to `xdm.alert.subcategory`.
 - One-sided actor mirroring -- when the vendor delivers ONE actor and no counterparty, mirror into BOTH `xdm.source.` and `xdm.target.`.
+- Authentication mandatory mapping -- when `scripts/profile_log.py` flags the sample as an authentication event (or the rule sets the `EVENT_TAG_AUTHENTICATION` tag / an `OPERATION_TYPE_AUTH_*` operation), map the full mandatory 12-field set from [authentication-mapping.md](authentication-mapping.md). The story is only created when every mandatory field is mapped; the linter raises advisory WARN-042 (warning only, exit code stays 0) for each one left unmapped.
 
 ## Step 6 -- Write the rule
 

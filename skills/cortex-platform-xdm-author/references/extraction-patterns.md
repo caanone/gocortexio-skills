@@ -46,6 +46,8 @@ _field = json_extract_scalar(to_string(<column>), "$.<path>")
 
 When: `_raw_log` is a single string with positional, delimiter-separated fields (Squid-style, CSV, etc.).
 
+For a syslog source (a `<NNN>` priority token at the start of `_raw_log`), parse the envelope first with the one canonical idiom in [syslog-envelope.md](syslog-envelope.md) -- it captures the host and decodes the priority once, the same way for every vendor -- then apply Pattern B to the payload body. Do not hand-roll a header regex anchored on a vendor literal; the linter flags that as WARN-040.
+
 ```
 alter
     _<inner> = arrayindex(regextract(_raw_log, "<wrapper_regex>"), 0)

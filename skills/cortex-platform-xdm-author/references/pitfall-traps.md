@@ -49,6 +49,13 @@ For each mapping in your draft rule, verify the XDM path exists in [xdm-schema.m
 
 ## Commonly confused field pairs
 
+### `xdm.target.host.*` vs `xdm.target.resource.*`
+
+- `xdm.target.host.hostname` -- a named device or asset: a server name, an endpoint, an OT / ICS asset such as `asset=PLC-17`. A host has an IP, so also emit `xdm.target.host.ipv4_addresses` when the IP is known (WARN-038).
+- `xdm.target.resource.name` -- a cloud or platform resource: an S3 bucket, a VM id, a Kubernetes object.
+
+A physical or named asset is a host, not a resource. Do NOT route an OT asset name into `xdm.target.resource.*`; that field is for cloud resources. The same split applies on the `source` and `intermediate` sides.
+
 ### `xdm.target.resource.name` vs `xdm.target.application.name`
 
 - `xdm.target.resource.name` -- cloud resource name (S3 bucket, VM name).

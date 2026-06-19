@@ -23100,6 +23100,10 @@
         {
           "synonym": "username",
           "count": 1
+        },
+        {
+          "synonym": "user_principal_name",
+          "count": 4
         }
       ],
       "synonyms_simple": [
@@ -23140,7 +23144,8 @@
         "userdisplayname",
         "useremail",
         "userid_upn",
-        "username"
+        "username",
+        "user_principal_name"
       ],
       "exampleVendors": [
         "1password",
@@ -23280,10 +23285,6 @@
         },
         {
           "synonym": "properties",
-          "count": 4
-        },
-        {
-          "synonym": "userprincipalname",
           "count": 4
         },
         {
@@ -23763,10 +23764,6 @@
           "count": 1
         },
         {
-          "synonym": "upn",
-          "count": 1
-        },
-        {
           "synonym": "ur_normalized",
           "count": 1
         },
@@ -23821,7 +23818,6 @@
         "accountname",
         "details",
         "properties",
-        "userprincipalname",
         "author",
         "identity",
         "source",
@@ -23941,7 +23937,6 @@
         "uid",
         "uname_after",
         "unifiadmin",
-        "upn",
         "ur_normalized",
         "usedname",
         "user_id",

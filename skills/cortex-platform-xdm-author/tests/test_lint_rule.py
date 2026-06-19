@@ -11,6 +11,7 @@ to confirm the exit-code contract.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -34,15 +35,50 @@ def _load_lint():
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
-    return mod.lint
+    return mod
 
 
-lint = _load_lint()
+_lint_mod = _load_lint()
+lint = _lint_mod.lint
+
+
+def _load_profiler():
+    import importlib.util
+
+    script = bundle_root() / "scripts" / "profile_log.py"
+    spec = importlib.util.spec_from_file_location("profile_log", script)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _rule_ids(fixture_name: str) -> list:
     source = (FIXTURES / fixture_name).read_text(encoding="utf-8")
     return [v["rule_id"] for v in lint(source)]
+
+
+_REF_FIELD_RE = re.compile(r"^\|\s*`(xdm\.[a-z0-9_.]+)`\s*\|")
+
+
+def _mandatory_fields_from_reference(reference: Path) -> set:
+    """Extract the mandatory authentication-story XDM fields from the
+    canonical "Mandatory fields" table in the bundled reference doc.
+
+    The table lists one backtick-quoted ``xdm.*`` field per row; the
+    section ends at the next ``## `` heading. This is the in-bundle source
+    of truth for the linter and profiler ``_AUTH_MANDATORY`` copies."""
+    fields = set()
+    in_section = False
+    for line in reference.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            in_section = line.startswith("## Mandatory fields")
+            continue
+        if in_section:
+            match = _REF_FIELD_RE.match(line)
+            if match:
+                fields.add(match.group(1))
+    return fields
 
 
 class TestCleanFixture(unittest.TestCase):
@@ -72,6 +108,12 @@ class TestSyntacticRules(unittest.TestCase):
         ("warn014_quoted_const.xql", "WARN-014"),
         ("warn035_scalar_into_array.xql", "WARN-035"),
         ("warn037_loglevel_severity.xql", "WARN-037"),
+        ("warn038_missing_host_ipv4.xql", "WARN-038"),
+        ("warn039_payload_in_description.xql", "WARN-039"),
+        ("warn040_vendor_anchored_header.xql", "WARN-040"),
+        ("warn041_pri_no_severity.xql", "WARN-041"),
+        ("warn042_auth_mandatory.xql", "WARN-042"),
+        ("info013_overmapping.xql", "INFO-013"),
     ]
 
     def test_each_fixture_fires(self):
@@ -125,6 +167,188 @@ class TestCliContract(unittest.TestCase):
         cp = self._run("err012_infix_arithmetic.xql", ["--format", "text"])
         self.assertEqual(cp.returncode, 1)
         self.assertIn("ERR-012", cp.stdout)
+
+
+class TestAuthMandatoryListsInSync(unittest.TestCase):
+    """The linter and profiler each carry a copy of the authentication
+    mandatory set. Both must stay identical to the canonical list so the
+    advisory WARN-042 and the profiler checklist never drift apart.
+
+    The canonical list ships inside the bundle as the "Mandatory fields"
+    table in ``references/authentication-mapping.md``, so this drift-guard
+    is fully self-contained and runs in a standalone checkout with no
+    external file or environment configuration."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        reference = (
+            bundle_root()
+            / "references"
+            / "authentication-mapping.md"
+        )
+        cls.expected = _mandatory_fields_from_reference(reference)
+        # The reference heading promises exactly 12 mandatory fields; a
+        # mismatch means the table itself drifted.
+        if len(cls.expected) != 12:
+            raise AssertionError(
+                "expected 12 mandatory fields in the reference table, "
+                "found %d" % len(cls.expected)
+            )
+
+    def test_linter_list_matches_reference(self):
+        self.assertEqual(set(_lint_mod._AUTH_MANDATORY), self.expected)
+
+    def test_profiler_list_matches_reference(self):
+        prof = _load_profiler()
+        self.assertEqual(set(prof._AUTH_MANDATORY), self.expected)
+
+
+class TestWarn042AuthMandatory(unittest.TestCase):
+    """WARN-042 auto-detects an authentication event and warns (never
+    blocks) for each unmapped mandatory authentication-story field."""
+
+    _COMPLETE_AUTH = """[MODEL: dataset=acme_idp_raw]
+filter _raw_log != null
+| alter
+    _user = json_extract_scalar(_raw_log, "$.user"),
+    _src = json_extract_scalar(_raw_log, "$.src_ip"),
+    _dst = json_extract_scalar(_raw_log, "$.dst_ip"),
+    _sport = json_extract_scalar(_raw_log, "$.src_port"),
+    _dport = json_extract_scalar(_raw_log, "$.dst_port"),
+    _svc = json_extract_scalar(_raw_log, "$.service"),
+    _action = json_extract_scalar(_raw_log, "$.action"),
+    _result = json_extract_scalar(_raw_log, "$.result")
+| alter
+    xdm.event.type = "authentication",
+    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
+    xdm.event.operation = XDM_CONST.OPERATION_TYPE_AUTH_LOGIN,
+    xdm.event.original_event_type = _action,
+    xdm.event.outcome = if(_result = "success", XDM_CONST.OUTCOME_SUCCESS,
+        _result != null, XDM_CONST.OUTCOME_FAILED),
+    xdm.auth.service = _svc,
+    xdm.source.user.upn = _user,
+    xdm.source.ipv4 = _src,
+    xdm.source.port = to_integer(to_number(_sport)),
+    xdm.target.ipv4 = _dst,
+    xdm.target.port = to_integer(to_number(_dport)),
+    xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP
+;
+"""
+
+    def test_fires_for_each_missing_mandatory_field(self):
+        ids = _rule_ids("warn042_auth_mandatory.xql")
+        # The fixture maps 5 of 12 mandatory fields, so 7 should be flagged.
+        self.assertEqual(ids.count("WARN-042"), 7, ids)
+
+    def test_only_warning_severity_so_exit_stays_zero(self):
+        source = (FIXTURES / "warn042_auth_mandatory.xql").read_text(
+            encoding="utf-8"
+        )
+        sev = {v["severity"] for v in lint(source) if v["rule_id"] == "WARN-042"}
+        self.assertEqual(sev, {"warning"})
+
+    def test_silent_on_non_auth_rule(self):
+        ids = _rule_ids("clean_rule.xql")
+        self.assertNotIn("WARN-042", ids)
+
+    def test_silent_when_all_mandatory_mapped(self):
+        ids = [v["rule_id"] for v in lint(self._COMPLETE_AUTH)]
+        self.assertNotIn("WARN-042", ids)
+
+    def test_value_conformance_flags_forbidden_literals(self):
+        # All 12 mandatory fields are present, so none should be flagged as
+        # missing. Seven, however, carry a value the authentication story
+        # forbids (event.type, event.operation, event.outcome, auth.service,
+        # source.ipv4, target.ipv4, network.ip_protocol).
+        source = (FIXTURES / "warn042_auth_bad_values.xql").read_text(
+            encoding="utf-8"
+        )
+        vios = [v for v in lint(source) if v["rule_id"] == "WARN-042"]
+        self.assertEqual(len(vios), 7, [v["message"] for v in vios])
+        self.assertEqual({v["severity"] for v in vios}, {"warning"})
+
+    def test_value_conformance_silent_on_temp_sourced_values(self):
+        # The complete fixture maps auth.service and outcome from temps and
+        # source.ipv4 from a temp. Value conformance must never second-guess
+        # a runtime-resolved value, so it stays silent here.
+        vios = [v for v in lint(self._COMPLETE_AUTH) if v["rule_id"] == "WARN-042"]
+        self.assertEqual(vios, [])
+
+    _DYNAMIC_AUTH = """[MODEL: dataset=acme_idp_raw]
+filter _raw_log != null
+| alter
+    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
+    xdm.event.type = event_type_col,
+    xdm.event.operation = op_col,
+    xdm.event.original_event_type = action_col,
+    xdm.event.outcome = outcome_col,
+    xdm.auth.service = svc_col,
+    xdm.source.user.upn = user_col,
+    xdm.source.ipv4 = src_ip,
+    xdm.source.port = to_integer(to_number(sport_col)),
+    xdm.target.ipv4 = dst_ip,
+    xdm.target.port = to_integer(to_number(dport_col)),
+    xdm.network.ip_protocol = proto_col
+;
+"""
+
+    def test_value_conformance_silent_on_bare_column_mappings(self):
+        # Direct raw-column mappings (no leading underscore) are not static
+        # literals. Value conformance must not mistake src_ip / proto_col
+        # for hard-coded values, even though they are not temps.
+        vios = [v for v in lint(self._DYNAMIC_AUTH) if v["rule_id"] == "WARN-042"]
+        self.assertEqual(vios, [])
+
+    _SIGNAL_ONLY_AUTH = """[MODEL: dataset=acme_idp_raw]
+filter _raw_log != null
+| alter
+    xdm.event.original_event_type = "user.login",
+    xdm.source.user.upn = user_col
+;
+"""
+
+    def test_classifies_auth_from_event_signal_without_marker(self):
+        # No explicit XDM marker (no EVENT_TAG_AUTHENTICATION,
+        # OPERATION_TYPE_AUTH_*, or "authentication" in event.type), but
+        # original_event_type carries an auth literal. WARN-042 must still
+        # classify the rule as authentication and flag the unmapped
+        # mandatory fields.
+        vios = [v for v in lint(self._SIGNAL_ONLY_AUTH) if v["rule_id"] == "WARN-042"]
+        self.assertTrue(vios, "signal-only auth rule should trigger WARN-042")
+        self.assertEqual({v["severity"] for v in vios}, {"warning"})
+        # original_event_type and source.user.upn are mapped; the rest of
+        # the mandatory set is missing and must be reported.
+        msgs = " ".join(v["message"] for v in vios)
+        self.assertIn("xdm.event.outcome", msgs)
+        self.assertIn("xdm.auth.service", msgs)
+
+    def test_classifies_auth_from_operation_literal_signal(self):
+        # The literal signal must work across every event-semantic field,
+        # including xdm.event.operation carrying an auth literal.
+        source = (
+            "[MODEL: dataset=acme_idp_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    xdm.event.operation = "signin",\n'
+            "    xdm.source.user.upn = user_col\n"
+            ";\n"
+        )
+        vios = [v for v in lint(source) if v["rule_id"] == "WARN-042"]
+        self.assertTrue(vios, "operation literal signal should trigger WARN-042")
+
+    def test_no_auth_classification_without_signal_or_marker(self):
+        # A MODEL rule with an event type that has no auth token and no
+        # marker must never be classified as authentication.
+        source = (
+            "[MODEL: dataset=acme_web_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    xdm.event.original_event_type = "file.download",\n'
+            "    xdm.source.user.upn = user_col\n"
+            ";\n"
+        )
+        vios = [v for v in lint(source) if v["rule_id"] == "WARN-042"]
+        self.assertEqual(vios, [])
 
 
 class TestErr027Branches(unittest.TestCase):
@@ -354,6 +578,131 @@ class TestWarn037SeverityLogLevel(unittest.TestCase):
             ";\n"
         )
         self.assertEqual(self._w37(source), [])
+
+
+class TestWarn038HostCompanion(unittest.TestCase):
+    """WARN-038 fires when a named host has an IP but no ipv4_addresses
+    companion, and stays silent once the companion is present."""
+
+    def _w38(self, source: str) -> list:
+        return [v for v in lint(source) if v["rule_id"] == "WARN-038"]
+
+    def test_silent_when_companion_present(self):
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _asset = json_extract_scalar(_raw_log, "$.asset"),\n'
+            '    _dst = json_extract_scalar(_raw_log, "$.dst")\n'
+            "| alter\n"
+            "    xdm.target.ipv4 = _dst,\n"
+            "    xdm.target.host.hostname = _asset,\n"
+            "    xdm.target.host.ipv4_addresses = if(_dst != null, "
+            "arraycreate(_dst), null)\n"
+            ";\n"
+        )
+        self.assertEqual(self._w38(source), [])
+
+    def test_silent_when_no_hostname(self):
+        # Only the IP, no named host -- nothing to companion.
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _dst = json_extract_scalar(_raw_log, "$.dst")\n'
+            "| alter\n"
+            "    xdm.target.ipv4 = _dst\n"
+            ";\n"
+        )
+        self.assertEqual(self._w38(source), [])
+
+
+class TestInfo013OverMapping(unittest.TestCase):
+    """INFO-013 fires on a temp spread across 3+ entity families, but not
+    on the documented source/target mirror (two families), and not when
+    the extra families are the event / observer metadata sinks."""
+
+    def _i13(self, source: str) -> list:
+        return [v for v in lint(source) if v["rule_id"] == "INFO-013"]
+
+    def test_silent_on_source_target_mirror(self):
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _ip = json_extract_scalar(_raw_log, "$.ip")\n'
+            "| alter\n"
+            "    xdm.source.ipv4 = _ip,\n"
+            "    xdm.target.ipv4 = _ip\n"
+            ";\n"
+        )
+        self.assertEqual(self._i13(source), [])
+
+    def test_silent_when_extra_family_is_event(self):
+        # A URL legitimately lives in target + network + the event summary;
+        # the event sink must not push it over the threshold.
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _url = json_extract_scalar(_raw_log, "$.url")\n'
+            "| alter\n"
+            "    xdm.target.url = _url,\n"
+            "    xdm.network.http.url = _url,\n"
+            '    xdm.event.description = concat("URL: ", _url)\n'
+            ";\n"
+        )
+        self.assertEqual(self._i13(source), [])
+
+    def test_fires_on_three_entity_families(self):
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _thing = json_extract_scalar(_raw_log, "$.thing")\n'
+            "| alter\n"
+            "    xdm.source.user.username = _thing,\n"
+            "    xdm.target.user.username = _thing,\n"
+            "    xdm.alert.name = _thing\n"
+            ";\n"
+        )
+        hits = self._i13(source)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["severity"], "info")
+
+
+class TestWarn039PayloadInDescription(unittest.TestCase):
+    """WARN-039 fires when the whole payload (via _raw_log or
+    to_json_string) is assigned to xdm.event.description, and stays silent
+    on a proper concat() summary over scalar temps."""
+
+    def _w39(self, source: str) -> list:
+        return [v for v in lint(source) if v["rule_id"] == "WARN-039"]
+
+    def test_fires_on_to_json_string(self):
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _d = json_extract_scalar(_raw_log, "$.d")\n'
+            "| alter\n"
+            "    xdm.event.description = to_json_string(detail)\n"
+            ";\n"
+        )
+        self.assertEqual(len(self._w39(source)), 1)
+
+    def test_silent_on_concat_summary(self):
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _act = json_extract_scalar(_raw_log, "$.action")\n'
+            "| alter\n"
+            "    xdm.observer.action = _act,\n"
+            '    xdm.event.description = concat("Action: ", _act)\n'
+            ";\n"
+        )
+        self.assertEqual(self._w39(source), [])
 
 
 class TestWorkedExamplesLintClean(unittest.TestCase):
