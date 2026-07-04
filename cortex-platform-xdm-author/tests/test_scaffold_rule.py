@@ -147,7 +147,15 @@ class TestScaffoldSyslogStage0(unittest.TestCase):
     def test_emits_pri_and_host_capture(self):
         rule = self._rule()
         self.assertIn('regextract(_raw_log, "^<(\\d{1,3})>")', rule)
-        self.assertIn("_syslog_host = coalesce(_host_5424, _host_3164)", rule)
+        self.assertIn(
+            "_syslog_host_raw = coalesce(_host_5424, _host_3164)", rule
+        )
+        # NIL-hostname guard: RFC 5424 permits "-" for HOSTNAME; the
+        # scaffold nulls it rather than mapping the literal dash.
+        self.assertIn(
+            '_syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)',
+            rule,
+        )
 
     def test_facility_and_severity_in_separate_alters(self):
         rule = self._rule()
@@ -199,20 +207,27 @@ class TestScaffoldAuthMandatory(unittest.TestCase):
             "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)",
             rule,
         )
-        self.assertIn(
-            "xdm.event.operation = XDM_CONST.OPERATION_TYPE_AUTH_LOGIN", rule
-        )
         self.assertIn('xdm.auth.service = "IDP"', rule)
         self.assertIn(
-            "xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP", rule
+            "xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_IP", rule
         )
+
+    def test_operation_is_not_blind_padded(self):
+        # xdm.event.operation is an XDM_CONST.OPERATION_TYPE enum with no
+        # neutral member, so the scaffold must NOT emit a guessed
+        # AUTH_LOGIN; it is a must-extract TODO the author derives.
+        rule = self._rule()
+        self.assertNotIn("xdm.event.operation = XDM_CONST", rule)
+        self.assertIn("xdm.event.operation", rule)  # present as a TODO line
 
     def test_unpaddable_fields_listed_as_todo(self):
         rule = self._rule()
-        # upn / original_event_type / outcome cannot be padded with a static
-        # value, so they appear as AUTH MANDATORY TODOs for the author.
+        # upn / operation / original_event_type / outcome cannot be padded
+        # with a safe value, so they appear as AUTH MANDATORY TODOs for the
+        # author.
         self.assertIn("AUTH MANDATORY", rule)
         self.assertIn("xdm.source.user.upn", rule)
+        self.assertIn("xdm.event.operation", rule)
 
     def test_self_gates_clean(self):
         errors = [v for v in _lint.lint(self._rule())
@@ -224,6 +239,98 @@ class TestScaffoldAuthMandatory(unittest.TestCase):
         self.assertNotIn('xdm.event.type = "authentication"', rule)
         self.assertNotIn("EVENT_TAG_AUTHENTICATION", rule)
         self.assertNotIn("AUTH MANDATORY", rule)
+
+
+class TestScaffoldNetworkMandatory(unittest.TestCase):
+    """When the profiler flags a network event, the scaffold pads the
+    mandatory fields that have a type-valid placeholder, sets
+    xdm.event.type to a network value, emits the story tag, and lists
+    the un-paddable fields as TODOs. Always self-gates clean."""
+
+    def _rule(self) -> str:
+        return _make("network_event.jsonl", vendor="AcmeFW", product="NGFW",
+                     dataset="acmefw_ngfw_raw")
+
+    def test_event_type_and_tag(self):
+        rule = self._rule()
+        self.assertIn('xdm.event.type = "network"', rule)
+        self.assertIn(
+            "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK)", rule
+        )
+
+    def test_paddable_fields_seeded(self):
+        rule = self._rule()
+        self.assertIn(
+            "xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_IP", rule
+        )
+        self.assertIn(
+            'xdm.network.protocol_layers = arraycreate("IP")', rule
+        )
+        self.assertIn(
+            "xdm.network.http.url_category = XDM_CONST.URL_CATEGORY_UNKNOWN",
+            rule,
+        )
+        self.assertIn("xdm.source.is_internal_ip = false", rule)
+        self.assertIn("xdm.target.is_internal_ip = false", rule)
+
+    def test_anchor_wired_fields_not_overwritten(self):
+        # src_ip is wired from the log by the anchor loop; the network pad
+        # must not duplicate the target.
+        rule = self._rule()
+        self.assertIn("xdm.source.ipv4 = _src_ip", rule)
+        assigns = [ln for ln in rule.splitlines()
+                   if ln.strip().startswith("xdm.source.ipv4 =")]
+        self.assertEqual(len(assigns), 1, assigns)
+
+    def test_self_gates_clean(self):
+        errors = [v for v in _lint.lint(self._rule())
+                  if v["severity"] == "error"]
+        self.assertEqual(errors, [], f"network scaffold not clean: {errors}")
+
+    def test_syslog_network_composes_with_stage0(self):
+        rule = _make("network_event_syslog.log", vendor="AcmeFW",
+                     product="NGFW", dataset="acmefw_ngfw_raw")
+        # Stage 0 envelope AND the network block in the same scaffold.
+        self.assertIn("_pri_facility = to_integer(divide(_pri, 8))", rule)
+        self.assertIn("xdm.observer.name = _syslog_host", rule)
+        self.assertIn(
+            "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK)", rule
+        )
+        errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
+        self.assertEqual(errors, [], f"syslog network scaffold: {errors}")
+
+    def test_dual_worksheet_merges_tags_once(self):
+        # Synthetic worksheet carrying BOTH story detections: exactly one
+        # merged tags assignment, and outcome is NOT padded (the stricter
+        # authentication vocabulary forbids OUTCOME_UNKNOWN).
+        ws = {
+            "detected_format": "jsonl",
+            "record_count": 1,
+            "fields": [],
+            "object_arrays": [],
+            "authentication": {"detected": True, "signals": []},
+            "network": {"detected": True, "signals": []},
+        }
+        rule = _scaffold.scaffold(ws, "AcmeVPN", "Gateway", "acmevpn_gw_raw")
+        self.assertIn(
+            "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, "
+            "XDM_CONST.EVENT_TAG_NETWORK)",
+            rule,
+        )
+        tags_lines = [ln for ln in rule.splitlines()
+                      if ln.strip().startswith("xdm.event.tags =")]
+        self.assertEqual(len(tags_lines), 1, tags_lines)
+        self.assertIn('xdm.event.type = "authentication"', rule)
+        self.assertNotIn("xdm.event.outcome = XDM_CONST.OUTCOME_UNKNOWN", rule)
+        errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
+        self.assertEqual(errors, [], f"dual scaffold not clean: {errors}")
+
+    def test_non_network_worksheet_has_no_network_block(self):
+        # The IdP login fixture detects authentication only.
+        rule = _make("auth_event.jsonl", vendor="Okta", product="SystemLog")
+        self.assertNotIn("EVENT_TAG_NETWORK", rule)
+        self.assertNotIn("NETWORK MANDATORY", rule)
+        self.assertNotIn("xdm.target.sent_bytes", rule)
 
 
 class TestScaffoldCli(unittest.TestCase):

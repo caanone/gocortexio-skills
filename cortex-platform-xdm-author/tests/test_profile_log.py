@@ -415,5 +415,239 @@ class TestAuthenticationDetection(unittest.TestCase):
         self.assertEqual(ws["authentication"]["signals"], [])
 
 
+class TestNetworkDetection(unittest.TestCase):
+    """detect_network is deliberately conservative: distinctive traffic
+    vocabulary, allow/deny action values, protocol names, or the complete
+    transport 5-tuple -- never a bare IP. It is independent of the
+    authentication block (an event can be both stories)."""
+
+    def test_detects_json_flow_record(self) -> None:
+        ws = _profile_fixture("network_event.jsonl")
+        net = ws["network"]
+        self.assertTrue(net["detected"], net)
+        self.assertEqual(len(net["mandatory_fields"]), 20)
+        kinds = {s["kind"] for s in net["signals"]}
+        # A flow record carries all three signal kinds.
+        self.assertIn("name", kinds)
+        self.assertIn("value", kinds)
+        self.assertIn("structure", kinds)
+
+    def test_detects_syslog_flow_record_via_values(self) -> None:
+        # Syslog collapses each line into _message, so only the value
+        # signal is available -- it must carry detection on its own.
+        ws = _profile_fixture("network_event_syslog.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        net = ws["network"]
+        self.assertTrue(net["detected"], net)
+        value_signals = [s for s in net["signals"] if s["kind"] == "value"]
+        self.assertTrue(value_signals, net["signals"])
+        self.assertTrue(
+            all(s["field"] == "_message" for s in value_signals),
+            net["signals"],
+        )
+
+    def test_independent_of_authentication(self) -> None:
+        # The IdP login fixture is authentication-only: no protocol field,
+        # no allow/deny vocabulary, so the network block must stay silent.
+        ws = _profile_fixture("auth_event.jsonl")
+        self.assertTrue(ws["authentication"]["detected"])
+        self.assertFalse(ws["network"]["detected"], ws["network"])
+
+    def test_ids_waf_profile_is_also_network(self) -> None:
+        # Network is the foundational layer: a WAF / IDS event describes a
+        # network connection first and a security judgement second, so the
+        # WAF fixture must carry the network block on top of its primary
+        # role (it holds the transport 5-tuple and block/allow vocabulary).
+        ws = _profile_fixture("acmeshield_waf.log")
+        self.assertTrue(ws["network"]["detected"], ws["network"])
+
+    def test_auth_with_full_transport_is_dual(self) -> None:
+        # An authentication event that carries the complete transport
+        # tuple (both endpoints, a port, a protocol) is ALSO a network
+        # connection -- both story blocks must fire.
+        import tempfile
+        rec = ('{"eventtype": "vpn.login", "user": "alice@example.com", '
+               '"result": "success", "src_ip": "198.51.100.23", '
+               '"src_port": 51820, "dst_ip": "10.0.0.1", '
+               '"dst_port": 443, "protocol": "tcp"}')
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False
+        ) as fh:
+            fh.write(rec + "\n")
+            path = Path(fh.name)
+        try:
+            ws = profile(str(path), path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink()
+        self.assertTrue(ws["authentication"]["detected"], ws["authentication"])
+        self.assertTrue(ws["network"]["detected"], ws["network"])
+
+    def test_bare_ip_never_fires(self) -> None:
+        # A record whose only network-ish content is an IP address field
+        # must not be classified as a network event.
+        import tempfile
+        rec = ('{"user": "alice", "operation": "file_saved", '
+               '"client_ip": "10.0.0.5", "document": "report.docx"}')
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False
+        ) as fh:
+            fh.write(rec + "\n")
+            path = Path(fh.name)
+        try:
+            ws = profile(str(path), path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink()
+        self.assertFalse(ws["network"]["detected"], ws["network"])
+        self.assertEqual(ws["network"]["signals"], [])
+
+    def test_detection_in_text_output(self) -> None:
+        cp = subprocess.run(
+            [sys.executable, str(PROFILE_SCRIPT),
+             str(FIXTURES / "network_event.jsonl"), "--format", "text"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertIn("network:", cp.stdout)
+        self.assertIn("WARN-043", cp.stdout)
+
+    def test_unknown_positional_text_still_scanned(self) -> None:
+        # A raw AWS VPC Flow export is positional text with no priority,
+        # no key=value and no month header: format stays "unknown", but
+        # the records must still surface as _message lines so the value
+        # scan sees the ACCEPT / REJECT vocabulary.
+        import tempfile
+        lines = (
+            "2 123456789010 eni-0a1b 10.20.30.40 203.0.113.9 51544 443 6 "
+            "25 20000 1782648001 1782648061 ACCEPT OK\n"
+            "2 123456789010 eni-0a1b 10.20.30.41 198.51.100.7 40122 53 17 "
+            "1 96 1782648002 1782648062 REJECT OK\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".log", delete=False
+        ) as fh:
+            fh.write(lines)
+            path = Path(fh.name)
+        try:
+            ws = profile(str(path), path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink()
+        self.assertEqual(ws["detected_format"], "unknown")
+        self.assertGreater(ws["record_count"], 0)
+        self.assertTrue(ws["network"]["detected"], ws["network"])
+
+    def test_login_field_name_is_not_an_auth_event(self) -> None:
+        # "login=alice@example.com" inside a proxy web log is user
+        # ATTRIBUTION (a field name), not a login event: the trailing "="
+        # guard must keep the sample out of the authentication story while
+        # the action vocabulary still classifies it as network.
+        import tempfile
+        line = (
+            '<14>Jun 30 12:00:01 nss01 ZS-WEB: datetime=2026-06-30,'
+            "action=Allowed,urlcategory=Business,serverip=203.0.113.9,"
+            "clientip=10.20.30.40,login=alice@example.com\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".log", delete=False
+        ) as fh:
+            fh.write(line)
+            path = Path(fh.name)
+        try:
+            ws = profile(str(path), path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink()
+        self.assertFalse(ws["authentication"]["detected"],
+                         ws["authentication"])
+        self.assertTrue(ws["network"]["detected"], ws["network"])
+
+    def test_aaa_permit_deny_stays_authentication_only(self) -> None:
+        # AAA precision rule: a TACACS+ gateway logs PERMIT / DENY as the
+        # AUTHENTICATION outcome with no transport flow behind it. The
+        # action-family vocabulary alone, inside an authentication event,
+        # must not classify the sample as network -- the suppression is
+        # reported so the author can see why.
+        ws = _profile_fixture("tacacs_aaa.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        self.assertTrue(ws["authentication"]["detected"])
+        net = ws["network"]
+        self.assertFalse(net["detected"], net)
+        self.assertIn("suppressed", net)
+
+    def test_authorization_only_sample_is_authentication(self) -> None:
+        # Edge case EC1: a log of ONLY "Authorization permitted / denied"
+        # lines (no login lines) is an authentication-story event. Before
+        # the authorization vocabulary was added it detected as
+        # auth=False, network=True -- exactly backwards.
+        import tempfile
+        lines = "\n".join([
+            '<14>Jun 19 09:51:59 aaa05.syd.example.local tacacsd[13844]: '
+            '00000000 Authorization permitted for alice.admin at '
+            '10.0.64.10, group Net Admins A, args service=shell cmd=show',
+            '<14>Jun 19 13:42:14 legacy-aaa01.syd.example.local '
+            'consumer_tacacs[2490]: Authorization denied for svc_vm at '
+            '10.0.72.10: No context found. Expired?',
+        ])
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".log", delete=False
+        ) as fh:
+            fh.write(lines + "\n")
+            path = Path(fh.name)
+        try:
+            ws = profile(str(path), path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink()
+        self.assertTrue(ws["authentication"]["detected"],
+                        ws["authentication"])
+        self.assertFalse(ws["network"]["detected"], ws["network"])
+
+    def test_ip_port_pair_lifts_aaa_suppression(self) -> None:
+        # Edge case EC6: a mixed AAA + firewall syslog whose flow lines
+        # quote BOTH endpoints as IP:port (but never a protocol word)
+        # carries real flows -- suppression must lift. A single lone
+        # IP:port (the TACACS chatter shape) must NOT lift it, which
+        # test_aaa_permit_deny_stays_authentication_only pins.
+        import tempfile
+        lines = "\n".join([
+            '<14>Jun 30 12:00:01 fw01 fw: action=allow '
+            'src=10.0.0.5:51544 dst=203.0.113.9:443 bytes=1220',
+            '<14>Jun 30 12:00:02 fw01 fw: action=deny '
+            'src=10.0.0.6:40122 dst=198.51.100.7:53 bytes=96',
+            '<14>Jun 30 12:00:03 fw01 vpn: user alice login success '
+            'from 198.51.100.23',
+        ])
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".log", delete=False
+        ) as fh:
+            fh.write(lines + "\n")
+            path = Path(fh.name)
+        try:
+            ws = profile(str(path), path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink()
+        self.assertTrue(ws["authentication"]["detected"])
+        self.assertTrue(ws["network"]["detected"], ws["network"])
+
+    def test_pri_stripped_syslog_detected(self) -> None:
+        # Edge case EC5: a relay can strip the <NNN> priority token; the
+        # line is still syslog and must reach the syslog path. Pure
+        # key=value samples must not be shadowed by the relaxed pattern.
+        fmt = _pl.detect_format(
+            "Jun 19 09:51:59 host1 app[1]: user session opened\n"
+        )
+        self.assertEqual(fmt, "syslog-3164")
+        kv_text = (FIXTURES / "sample.kv").read_text(encoding="utf-8")
+        self.assertEqual(_pl.detect_format(kv_text), "kv")
+
+    def test_protocol_token_lifts_aaa_suppression(self) -> None:
+        # The same suppression must NOT apply when real flow evidence is
+        # present: the firewall syslog fixture carries login-free action
+        # words AND proto=tcp/udp tokens, and an auth log that names a
+        # protocol keeps both stories.
+        ws = _profile_fixture("network_event_syslog.log")
+        self.assertTrue(ws["network"]["detected"], ws["network"])
+        # WAF fixture: structure signal lifts it too.
+        ws2 = _profile_fixture("acmeshield_waf.log")
+        self.assertTrue(ws2["network"]["detected"], ws2["network"])
+
+
 if __name__ == "__main__":
     unittest.main()

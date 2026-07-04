@@ -1,0 +1,2 @@
+<134>Jun 30 12:00:01 fw01 acmefw: action=allow proto=tcp src=10.20.30.40 spt=51544 dst=203.0.113.9 dpt=443 sent=1220 rcvd=8480 rule=outbound-web
+<134>Jun 30 12:00:02 fw01 acmefw: action=deny proto=udp src=10.20.30.41 spt=40122 dst=198.51.100.7 dpt=53 sent=96 rcvd=0 rule=block-external-dns

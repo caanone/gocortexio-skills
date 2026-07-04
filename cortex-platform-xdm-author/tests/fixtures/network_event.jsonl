@@ -1,0 +1,2 @@
+{"ts": "2026-06-30T12:00:01Z", "action": "allow", "protocol": "tcp", "src_ip": "10.20.30.40", "src_port": 51544, "dst_ip": "203.0.113.9", "dst_port": 443, "bytes_sent": 1220, "bytes_received": 8480, "rule": "outbound-web", "session": "f81aa3"}
+{"ts": "2026-06-30T12:00:02Z", "action": "deny", "protocol": "udp", "src_ip": "10.20.30.41", "src_port": 40122, "dst_ip": "198.51.100.7", "dst_port": 53, "bytes_sent": 96, "bytes_received": 0, "rule": "block-external-dns", "session": "f81aa4"}

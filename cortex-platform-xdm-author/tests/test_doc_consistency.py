@@ -58,6 +58,10 @@ ALLOW_KNOWN_BAD_XDM_PATHS = {
     "xdm.target.user.email": "pitfall-traps Wrong column (right is xdm.target.user.upn)",
     # compatibility-notes.md documents this as a deprecated path.
     "xdm.network.direction": "compatibility-notes deprecated path (documented)",
+    # network-mapping.md documents this as NON-EXISTENT: the pasted
+    # network mandatory list named it, and the reference corrects it to
+    # xdm.network.http.http_header.
+    "xdm.network.http.response_headers": "network-mapping counter-example (corrected to http_header)",
     # parent_process.* family -- documented as NON-EXISTENT.
     "xdm.source.process.parent_process": "compatibility-notes/pitfall-traps anti-pattern (parent path)",
     "xdm.source.process.parent_process.command_line": "compatibility-notes anti-pattern",
@@ -351,6 +355,24 @@ class TestSyslogEnvelopeWiring(unittest.TestCase):
             "syslog-envelope.md",
             read_text("SKILL.md"),
             "SKILL.md does not link to syslog-envelope.md",
+        )
+
+
+class TestNetworkMappingWiring(unittest.TestCase):
+    """The network mandatory-mapping reference must exist and be
+    reachable from SKILL.md, mirroring the authentication reference."""
+
+    def test_reference_exists(self):
+        self.assertTrue(
+            (bundle_root() / "references" / "network-mapping.md").is_file(),
+            "references/network-mapping.md is missing",
+        )
+
+    def test_linked_from_skill_md(self):
+        self.assertIn(
+            "network-mapping.md",
+            read_text("SKILL.md"),
+            "SKILL.md does not link to network-mapping.md",
         )
 
 

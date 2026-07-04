@@ -65,7 +65,9 @@ _SYSLOG_STAGE0 = r"""| alter
     _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
     _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
-    _syslog_host = coalesce(_host_5424, _host_3164)
+    _syslog_host_raw = coalesce(_host_5424, _host_3164)
+| alter
+    _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
 | alter
     _pri_facility = to_integer(divide(_pri, 8))
 | alter
@@ -103,12 +105,17 @@ _SYSLOG_ENVELOPE_TARGETS = {
 # rest -- the ones the doc says must come from the raw log, never a static
 # value -- as TODOs. The advisory WARN-042 then flags anything still
 # unmapped. xdm.event.type is handled by the always-present drain line
-# (set to "authentication" for an auth event), so it is not repeated here.
+# (set to "authentication" for an auth event) and xdm.event.tags by the
+# merged story-tags emission (the tags array carries the union of the
+# detected stories), so neither is repeated here.
+# xdm.event.operation is NOT padded: it is an XDM_CONST.OPERATION_TYPE
+# enum and there is no neutral member, so a blind default (e.g.
+# AUTH_LOGIN) would assert an operation the log may not describe. It is a
+# must-extract TODO instead -- the author derives the specific member, or
+# leaves it unmapped when the event kind is unclear.
 _AUTH_PADDABLE = [
-    ("xdm.event.tags", "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)"),
-    ("xdm.event.operation", "XDM_CONST.OPERATION_TYPE_AUTH_LOGIN"),
     ("xdm.auth.service", '"IDP"'),
-    ("xdm.network.ip_protocol", "XDM_CONST.IP_PROTOCOL_TCP"),
+    ("xdm.network.ip_protocol", "XDM_CONST.IP_PROTOCOL_IP"),
     ("xdm.source.port", "to_integer(0)"),
     ("xdm.target.ipv4", '""'),
     ("xdm.target.port", "to_integer(0)"),
@@ -117,13 +124,52 @@ _AUTH_PADDABLE = [
 # from the raw log. Auto-wired by the normal anchor loop when the source
 # carries them; otherwise listed as TODO and flagged by WARN-042.
 _AUTH_MUST_EXTRACT = [
+    ("xdm.event.operation",
+     "the specific XDM_CONST.OPERATION_TYPE_* (AUTH_LOGIN for a password "
+     "login, AUTH_MFA for MFA); leave unmapped rather than guessing when "
+     "the event kind is unclear"),
     ("xdm.source.user.upn",
-     "authenticated identity in UPN format (user@domain); story correlation key"),
+     "authenticated identity, ALWAYS UPN-shaped; when the raw value may "
+     'be bare use if(_u contains "@", _u, _u != null, '
+     'concat(_u, "@localhost"))'),
     ("xdm.source.ipv4",
      "real client source IP from the raw log (never static, empty, or a list)"),
     ("xdm.event.original_event_type", "raw vendor event name exactly as logged"),
     ("xdm.event.outcome",
      "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED, on conclusive events only"),
+]
+
+# Network-event mandatory mapping (references/network-mapping.md, the
+# canonical in-bundle source). Same shape as the authentication
+# block: pad what has an official placeholder, TODO-list what must come
+# from the raw log. xdm.event.type and xdm.event.tags are handled by the
+# always-present drain line and the merged story-tags emission, so
+# neither is repeated here. xdm.event.outcome is padded OUTCOME_UNKNOWN
+# for a network-only event but deliberately NOT on a dual event -- the
+# authentication story allows SUCCESS / FAILED only, so there the
+# outcome stays a must-extract TODO.
+_NETWORK_PADDABLE = [
+    ("xdm.event.outcome", "XDM_CONST.OUTCOME_UNKNOWN"),
+    ("xdm.network.ip_protocol", "XDM_CONST.IP_PROTOCOL_IP"),
+    ("xdm.network.protocol_layers", 'arraycreate("IP")'),
+    ("xdm.network.http.http_header.header", '""'),
+    ("xdm.network.http.http_header.value", '""'),
+    ("xdm.network.http.url_category", "XDM_CONST.URL_CATEGORY_UNKNOWN"),
+    ("xdm.source.host.device_id", '""'),
+    ("xdm.source.ipv6", '""'),
+    ("xdm.source.is_internal_ip", "false"),
+    ("xdm.source.port", "to_integer(0)"),
+    ("xdm.source.sent_bytes", "to_integer(0)"),
+    ("xdm.target.host.device_id", '""'),
+    ("xdm.target.ipv4", '""'),
+    ("xdm.target.ipv6", '""'),
+    ("xdm.target.is_internal_ip", "false"),
+    ("xdm.target.port", "to_integer(0)"),
+    ("xdm.target.sent_bytes", "to_integer(0)"),
+]
+_NETWORK_MUST_EXTRACT = [
+    ("xdm.source.ipv4",
+     'real client source IP from the raw log; "" only when IPv6-only'),
 ]
 
 
@@ -171,6 +217,7 @@ def scaffold(
     fmt = worksheet.get("detected_format", "unknown")
     is_syslog = fmt in _SYSLOG_FORMATS
     is_auth = bool((worksheet.get("authentication") or {}).get("detected"))
+    is_network = bool((worksheet.get("network") or {}).get("detected"))
     fields = worksheet.get("fields") or []
     schema = load_xdm_paths()
 
@@ -264,6 +311,27 @@ def scaffold(
             "//   (syslog priority, fallback)  -> xdm.alert.severity",
         ] + mapping_rows
 
+    # Story tags: xdm.event.tags is an array, so an event that is both
+    # authentication and network carries the UNION of the story markers in
+    # ONE arraycreate(...) -- a second tags assignment would overwrite the
+    # first (WARN-043 flags that).
+    story_tags = []
+    if is_auth:
+        story_tags.append("XDM_CONST.EVENT_TAG_AUTHENTICATION")
+    if is_network:
+        story_tags.append("XDM_CONST.EVENT_TAG_NETWORK")
+    if story_tags and "xdm.event.tags" not in used_targets:
+        used_targets.add("xdm.event.tags")
+        drains.append(
+            f"    xdm.event.tags = arraycreate({', '.join(story_tags)})"
+        )
+        label = (
+            "(story tags, merged)        " if len(story_tags) > 1
+            else "(auth mandatory, padded)    " if is_auth
+            else "(network mandatory, padded) "
+        )
+        mapping_rows.append(f"//   {label}-> xdm.event.tags")
+
     if is_auth:
         # Pad the mandatory fields that have an official placeholder; the
         # normal anchor loop above may already have mapped some from the
@@ -282,9 +350,31 @@ def scaffold(
                     f"//   {field:<28} -- AUTH MANDATORY (map from raw): {hint}"
                 )
 
+    if is_network:
+        for field, rhs in _NETWORK_PADDABLE:
+            if field == "xdm.event.outcome" and is_auth:
+                # The authentication story allows SUCCESS / FAILED only, so
+                # on a dual event the OUTCOME_UNKNOWN pad would violate it;
+                # the outcome stays a must-extract TODO (listed by the auth
+                # block above).
+                continue
+            if field not in used_targets:
+                used_targets.add(field)
+                drains.append(f"    {field} = {rhs}")
+                mapping_rows.append(
+                    f"//   (network mandatory, padded) -> {field}"
+                )
+        for field, hint in _NETWORK_MUST_EXTRACT:
+            if field not in used_targets:
+                todo_rows.append(
+                    f"//   {field:<28} -- NETWORK MANDATORY (map from raw): "
+                    f"{hint}"
+                )
+
     # Assemble. Observer + event.type are always present.
     header = _build_header(
-        vendor, product, dataset, fmt, mapping_rows, todo_rows, is_auth
+        vendor, product, dataset, fmt, mapping_rows, todo_rows, is_auth,
+        is_network,
     )
 
     body: List[str] = [f"[MODEL: dataset={dataset}]", "filter", "    _raw_log != null"]
@@ -296,12 +386,16 @@ def scaffold(
         body.append(",\n".join(extractions))
     body.append("| alter")
     # For an authentication event xdm.event.type must resolve to a value
-    # containing "authentication" (mandatory marker); otherwise the
-    # author sets the normalised category by hand.
-    event_type_line = (
-        '    xdm.event.type = "authentication"' if is_auth
-        else '    xdm.event.type = "ALERT"'  # TODO: set the normalised category
-    )
+    # containing "authentication"; for a network event, "network". On a
+    # dual event the authentication value wins the single string -- the
+    # tags array already carries the network marker. Otherwise the author
+    # sets the normalised category by hand.
+    if is_auth:
+        event_type_line = '    xdm.event.type = "authentication"'
+    elif is_network:
+        event_type_line = '    xdm.event.type = "network"'
+    else:
+        event_type_line = '    xdm.event.type = "ALERT"'  # TODO: set the normalised category
     drain_lines = [
         f'    xdm.observer.vendor = "{vendor}"',
         f'    xdm.observer.product = "{product}"',
@@ -324,6 +418,7 @@ def _build_header(
     mapping_rows: List[str],
     todo_rows: List[str],
     is_auth: bool = False,
+    is_network: bool = False,
 ) -> str:
     lines = [
         "// SPDX-FileCopyrightText: GoCortexIO",
@@ -350,9 +445,28 @@ def _build_header(
             "story needs the full mandatory field set (see "
             "references/authentication-mapping.md). Paddable fields are seeded "
             "with the official placeholders above; review xdm.auth.service "
-            "(SP vs IDP) and xdm.event.operation (AUTH_LOGIN vs AUTH_MFA). The "
-            "AUTH MANDATORY entries below MUST be mapped from the raw log -- "
-            "the advisory WARN-042 flags any left unmapped."
+            "(SP vs IDP). The AUTH MANDATORY entries below MUST be mapped "
+            "from the raw log -- derive the specific xdm.event.operation "
+            "(never default to a guess) -- and the advisory WARN-042 flags "
+            "any left unmapped."
+        )
+    if is_network:
+        lines.append("//")
+        lines.append(
+            "// NOTE: network event detected -- the XDM network story needs "
+            "the full mandatory field set (see references/network-mapping.md). "
+            "Paddable fields are seeded with type-valid placeholders above; "
+            "upgrade the pads the log can actually fill (protocol, ports, "
+            "byte counts, is_internal_ip via incidr over RFC 1918). The "
+            "NETWORK MANDATORY entries below MUST be mapped from the raw log "
+            "-- the advisory WARN-043 flags any left unmapped."
+        )
+    if is_auth and is_network:
+        lines.append("//")
+        lines.append(
+            "// NOTE: dual event (authentication AND network) -- "
+            "xdm.event.tags carries the union of both story markers in ONE "
+            "arraycreate(...); xdm.event.type keeps the authentication value."
         )
     if fmt in _SYSLOG_FORMATS:
         lines.append("//")

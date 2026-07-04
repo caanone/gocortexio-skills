@@ -2774,6 +2774,18 @@
         {
           "synonym": "user_role",
           "count": 1
+        },
+        {
+          "synonym": "priv_lvl",
+          "count": 1
+        },
+        {
+          "synonym": "priv_level",
+          "count": 1
+        },
+        {
+          "synonym": "privilege_level",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -2782,7 +2794,10 @@
         "usertype",
         "actortype",
         "spriv",
-        "user_role"
+        "user_role",
+        "priv_lvl",
+        "priv_level",
+        "privilege_level"
       ],
       "exampleVendors": [
         "citrix",
@@ -10853,6 +10868,14 @@
         {
           "synonym": "urlcategorycode",
           "count": 1
+        },
+        {
+          "synonym": "urlcategory",
+          "count": 1
+        },
+        {
+          "synonym": "urlsupercategory",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -10866,7 +10889,9 @@
         "message",
         "requestcontext",
         "urlcat",
-        "urlcategorycode"
+        "urlcategorycode",
+        "urlcategory",
+        "urlsupercategory"
       ],
       "exampleVendors": [
         "barracuda",
@@ -18221,6 +18246,14 @@
         {
           "synonym": "useraddress",
           "count": 1
+        },
+        {
+          "synonym": "cltip",
+          "count": 1
+        },
+        {
+          "synonym": "orig_h",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -18355,7 +18388,9 @@
         "syslog_msg",
         "title",
         "unifi_client_ipv4",
-        "useraddress"
+        "useraddress",
+        "cltip",
+        "orig_h"
       ],
       "exampleVendors": [
         "1password",
@@ -19702,6 +19737,14 @@
         {
           "synonym": "userip",
           "count": 1
+        },
+        {
+          "synonym": "s_port",
+          "count": 2
+        },
+        {
+          "synonym": "orig_p",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -19745,7 +19788,9 @@
         "src",
         "tosourceport",
         "upstreamsourceport",
-        "userip"
+        "userip",
+        "s_port",
+        "orig_p"
       ],
       "exampleVendors": [
         "application",
@@ -28645,6 +28690,18 @@
         {
           "synonym": "upstream_addr",
           "count": 1
+        },
+        {
+          "synonym": "dvc_ip",
+          "count": 1
+        },
+        {
+          "synonym": "svrip",
+          "count": 1
+        },
+        {
+          "synonym": "resp_h",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -28732,7 +28789,10 @@
         "targetaddress",
         "targetnetwork",
         "translatedip",
-        "upstream_addr"
+        "upstream_addr",
+        "dvc_ip",
+        "svrip",
+        "resp_h"
       ],
       "exampleVendors": [
         "akamai",
@@ -29725,6 +29785,10 @@
         {
           "synonym": "upstream_addr",
           "count": 1
+        },
+        {
+          "synonym": "resp_p",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -29776,7 +29840,8 @@
         "title",
         "totargetport",
         "translatedport",
-        "upstream_addr"
+        "upstream_addr",
+        "resp_p"
       ],
       "exampleVendors": [
         "akamai",
@@ -33987,6 +34052,14 @@
         {
           "synonym": "server_bytes",
           "count": 1
+        },
+        {
+          "synonym": "bytes_received",
+          "count": 2
+        },
+        {
+          "synonym": "recv_bytes",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -34014,7 +34087,9 @@
         "responsebytes_s",
         "scbytes",
         "sent_bytes",
-        "server_bytes"
+        "server_bytes",
+        "bytes_received",
+        "recv_bytes"
       ],
       "exampleVendors": [
         "akamai",
@@ -35609,6 +35684,21 @@
         "msft",
         "radware",
         "watchguard"
+      ]
+    },
+    "xdm.source.is_internal_ip": {
+      "frequency": 3,
+      "synonyms": [
+        {
+          "synonym": "is_internal",
+          "count": 1
+        }
+      ],
+      "synonyms_simple": [
+        "is_internal"
+      ],
+      "exampleVendors": [
+        "zscaler"
       ]
     }
   }

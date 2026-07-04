@@ -20,7 +20,9 @@ filter
 | alter
     xdm.event.type = "authentication",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-    xdm.source.user.upn = _user,
+    xdm.source.user.upn = if(
+        _user contains "@", _user,
+        _user != null, concat(_user, "@localhost")),
     xdm.source.ipv4 = _src,
     xdm.event.outcome = if(
         _result = "success", XDM_CONST.OUTCOME_SUCCESS,

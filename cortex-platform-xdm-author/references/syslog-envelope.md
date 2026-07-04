@@ -54,8 +54,15 @@ filter
     _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
     _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
-    _syslog_host = coalesce(_host_5424, _host_3164)
+    _syslog_host_raw = coalesce(_host_5424, _host_3164)
+| alter
+    _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
 ```
+
+RFC 5424 permits the NILVALUE `-` for the HOSTNAME field, so the final
+guard stage nulls it out: a relay that hides the host can never leak a
+literal `-` into `xdm.observer.name` -- the field stays null and the
+author sources the observer from a payload field instead.
 
 Optional envelope fields (capture only when you will map them):
 
@@ -172,6 +179,7 @@ NOT MAPPED
 [ ] filter _raw_log != null is the first stage
 [ ] PRI captured with ^<(\d{1,3})> (when present)
 [ ] host captured via the RFC 3164 + RFC 5424 coalesce, not a vendor literal
+[ ] NILVALUE hostname (-) guarded to null, never mapped literally
 [ ] priority decoded with function-form arithmetic (no infix, no modulo)
 [ ] facility and severity in separate alter stages (no sibling reference)
 [ ] severity/log_level use coalesce(payload, priority) -- payload wins

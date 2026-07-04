@@ -33,6 +33,14 @@ regardless of vendor. Common signals:
 block of the worksheet so the detection is deterministic rather than a
 judgement call. When detected, apply the mandatory set below.
 
+Network is the foundational layer beneath this one: when the
+authentication log also carries the full transport flow (both endpoint
+addresses, a port, and a protocol -- a VPN login, an SSH session, a
+gateway sign-in), the event is ALSO a network connection. Apply the
+mandatory set in [network-mapping.md](network-mapping.md) on top of
+this one, with the union of the story tags in ONE
+`xdm.event.tags = arraycreate(...)`.
+
 When detected, `scripts/scaffold_rule.py` pre-populates the mandatory
 set: it pads the fields that have an official placeholder (tags,
 operation, service, ip_protocol, the transport ports, target.ipv4),
@@ -67,14 +75,14 @@ is a reminder.
 | `xdm.source.port` | integer | Map the real value; otherwise `to_integer(0)`. |
 | `xdm.target.ipv4` | string | Map a real value if present; otherwise the empty string `""`. Do not map a list. |
 | `xdm.target.port` | integer | Map the real value; otherwise `to_integer(0)`. |
-| `xdm.network.ip_protocol` | integer (enum) | Assign the appropriate `XDM_CONST.IP_PROTOCOL_*` (interactive auth over TCP -> `IP_PROTOCOL_TCP`). |
+| `xdm.network.ip_protocol` | integer (enum) | Assign the appropriate `XDM_CONST.IP_PROTOCOL_*` (interactive auth over TCP -> `IP_PROTOCOL_TCP`; pad `IP_PROTOCOL_IP` when absent). |
 | `xdm.event.type` | string | Resolve to a value that contains `authentication`. |
 | `xdm.event.tags` | array | `arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)`. |
-| `xdm.event.operation` | string (enum) | `XDM_CONST.OPERATION_TYPE_AUTH_LOGIN` (password only) or `XDM_CONST.OPERATION_TYPE_AUTH_MFA` (involves MFA). |
+| `xdm.event.operation` | enum | Derive the specific `XDM_CONST.OPERATION_TYPE_*` from the event: `OPERATION_TYPE_AUTH_LOGIN` (password login), `OPERATION_TYPE_AUTH_MFA` (involves MFA), `OPERATION_TYPE_AUDIT` (authorization / accounting). There is NO neutral member, so NEVER blind-default to `AUTH_LOGIN` -- when the event kind is genuinely unclear, leave the field unmapped (or `""`) rather than asserting an operation the log does not describe. |
 | `xdm.event.original_event_type` | string | The raw vendor event name exactly as logged (e.g. `user.authentication.sso`, `microsoft.login.success`). |
 | `xdm.event.outcome` | string (enum) | Only `XDM_CONST.OUTCOME_SUCCESS` or `XDM_CONST.OUTCOME_FAILED`, and only on conclusive events. Do not set on intermediate steps. |
 | `xdm.auth.service` | string | Role in the flow: `"SP"` (service provider, initiates) or `"IDP"` (identity provider, validates). The same system can be IDP in one event and SP in another, so map per event type. |
-| `xdm.source.user.upn` | string | The authenticated identity in UPN format (`jane.doe@company.com`). Cannot be empty. This is the central correlation key across IdPs -- it is `upn`, not `username`. |
+| `xdm.source.user.upn` | string | The authenticated identity, ALWAYS UPN-shaped (`jane.doe@company.com`). Cannot be empty. This is the central correlation key across IdPs -- it is `upn`, not `username`. When the raw identity may be bare, synthesise the shape: `if(_username contains "@", _username, _username != null, concat(_username, "@localhost"))`. |
 
 Placeholder policy for the mandatory set:
 
@@ -92,6 +100,48 @@ Placeholder policy for the mandatory set:
 Note on identity: `xdm.source.user.upn` is the mandatory key. The
 human-readable display name is the optional `xdm.source.user.username`
 below -- do not substitute one for the other.
+
+The upn value must ALWAYS be UPN-shaped (`user@domain`). A direct
+mapping (`xdm.source.user.upn = _upn`) is allowed ONLY when the source
+field is a UPN by definition -- `userPrincipalName`, an email address,
+an IdP login id. For every other identity source, or whenever there is
+any doubt, use the shape-guard idiom: pass a value that already carries
+`@` through unchanged, and synthesise a domain for a bare principal.
+
+```
+    xdm.source.user.upn = if(
+        _username contains "@", _username,
+        _username != null, concat(_username, "@localhost"))
+```
+
+When the source is known to be bare (a TACACS principal, a Windows
+`TargetUserName`, an sshd user), the short form
+`if(_username != null, concat(_username, "@localhost"))` is equivalent.
+Never emit `xdm.source.user.upn = _username` for a possibly-bare
+identity -- the linter raises an advisory WARN-042 for a bare
+identifier whose name does not itself indicate a UPN source. The same
+shape rule applies to `xdm.target.user.upn` when a rule maps it.
+
+## Deriving xdm.event.operation
+
+`xdm.event.operation` is an `XDM_CONST.OPERATION_TYPE_*` enum with no
+neutral member, so always DERIVE the right member from the event before
+considering a fall-back. Match the event signal (in the vendor event
+name / action / sub-type) to the operation:
+
+| Event signal (name / action / value) | Operation |
+| --- | --- |
+| login, logon, log-on, sign-in, sign-on, sso, interactive logon, password login | `XDM_CONST.OPERATION_TYPE_AUTH_LOGIN` |
+| mfa, 2fa, otp, push, verify, second factor, step-up | `XDM_CONST.OPERATION_TYPE_AUTH_MFA` |
+| authorization, authorisation, accounting, command accounting, audit, policy evaluation | `XDM_CONST.OPERATION_TYPE_AUDIT` |
+| none of the above can be determined | leave unmapped (or `""`) -- never guess |
+
+The match is on the event's classification field, not on a field name
+alone. Prefer an `if()` chain keyed on the vendor event value, for
+example `if(_factor != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA, _event
+contains "login", XDM_CONST.OPERATION_TYPE_AUTH_LOGIN)`. Only when the
+event kind is genuinely ambiguous does the field stay unmapped -- the
+advisory WARN-042 then reminds, which is correct.
 
 ## Worked shape (JSON source)
 
@@ -157,6 +207,59 @@ them when present; omit them otherwise.
 | `xdm.source.location.city` | Geo of the source. The companion geo leaves are `xdm.source.location.country`, `xdm.source.location.region`, `xdm.source.location.continent`, `xdm.source.location.timezone`, `xdm.source.location.latitude`, `xdm.source.location.longitude`. |
 | `xdm.network.session_id` | Aggregates multiple actions across a session window. |
 | `xdm.session_context_id` | Correlates the events of a single auth request / transaction (narrower than `xdm.network.session_id`). |
+
+## AAA gateways (TACACS+, RADIUS, Cisco ISE)
+
+Network-device AAA logs are authentication events with their own
+topology and vocabulary. The full worked treatment (nine event shapes
+from one daemon family, including legacy freeform lines) is
+[worked-examples/08-cisco-tacacs-aaa-multi-shape.md](worked-examples/08-cisco-tacacs-aaa-multi-shape.md).
+
+Topology -- three parties, not two:
+
+| Party | Raw evidence | XDM home |
+| --- | --- | --- |
+| Principal (the human or service account) | `user=` | `xdm.source.user.upn` (and `.username`) |
+| Principal's workstation | `src_ip=` | `xdm.source.ipv4` |
+| Network device being accessed | `dvc_ip=` / `at <ip>` | `xdm.target.ipv4` |
+| AAA server (validates) | syslog envelope host | `xdm.observer.name` (Stage 0); `xdm.auth.service = "IDP"` |
+
+Rules specific to this family:
+
+- Non-UPN identities: AAA principals (`svc_nms1`, `alice.admin`) are
+  rarely `user@domain`, but `xdm.source.user.upn` is the mandatory
+  correlation key, cannot be empty, and must ALWAYS be UPN-shaped --
+  synthesise the shape with
+  `if(_user contains "@", _user, _user != null, concat(_user, "@localhost"))`
+  and carry the raw principal in `xdm.source.user.username`.
+- PERMIT / DENY is the AUTHENTICATION outcome, not a network action.
+  Do not tag `XDM_CONST.EVENT_TAG_NETWORK` unless the record carries a
+  real transport flow (protocol, ports, byte counts); the profiler
+  applies the same rule automatically.
+- Accounting Start / Stop is session lifecycle, not success or failure:
+  leave `xdm.event.outcome` unset there, use
+  `XDM_CONST.OPERATION_TYPE_AUDIT` for the operation, and map
+  `task_id` -> `xdm.network.session_id`, `elapsed_time` ->
+  `xdm.event.duration`, `cmd` -> `xdm.event.operation_sub_type`
+  (command accounting). On the authentication shapes, the operation is
+  `OPERATION_TYPE_AUTH_LOGIN` and the auth method is `"password"`.
+- `xdm.event.outcome_reason`: normalise the known vendor reasons
+  (`Bad Password` -> `bad_credentials`, `No such user` ->
+  `user_does_not_exist`) and pass unknown reasons through unchanged --
+  never force them to a placeholder.
+- The vendor `port=` is a TTY / line name (`vty0`, `/dev/pts/7`,
+  `rest_http`), never a TCP port: the mandatory integer ports take
+  `to_integer(0)` and the line name is documented NOT MAPPED.
+- `priv_lvl` -> `xdm.auth.privilege_level` (`15` ->
+  `XDM_CONST.PRIVILEGE_LEVEL_ADMIN`, `0` -> `PRIVILEGE_LEVEL_USER`);
+  `group` -> `xdm.source.user.groups` via `arraycreate()`.
+- Filter diagnostic chatter FIRST (parser hooks, key errors, internal
+  bookkeeping lines): keep the event shapes in with an explicit filter
+  rather than letting non-events produce near-empty XDM rows.
+- Freeform legacy lines: capture addresses with `[\d.]+` only, so a
+  placeholder token such as `from async` can never land in an IPv4
+  field, and bound the username capture (up to ` from `) so principals
+  with embedded spaces survive.
 
 Constants used above live in [xdm-const.md](xdm-const.md); every target
 path is defined in [xdm-schema.md](xdm-schema.md).

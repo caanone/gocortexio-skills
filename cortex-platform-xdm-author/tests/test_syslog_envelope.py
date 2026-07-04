@@ -134,6 +134,18 @@ class TestSyslogPriorityDecode(unittest.TestCase):
         # A non-envelope field still populates, proving graceful degradation.
         self.assertEqual(out["xdm.observer.vendor"], "Acme")
 
+    def test_rfc5424_nil_hostname_never_mapped(self):
+        # RFC 5424 permits the NILVALUE "-" for HOSTNAME. The guard stage
+        # nulls it, so a hidden host can never leak a literal "-" into
+        # xdm.observer.name; the priority decode is unaffected.
+        record = "<134>1 2026-06-18T12:34:56Z - app 123 - - body here"
+        out = _verify.evaluate_rule(self.rule, record)
+        self.assertIsNone(out["xdm.observer.name"])
+        self.assertEqual(
+            out["xdm.event.log_level"], "XDM_CONST.LOG_LEVEL_INFORMATIONAL"
+        )
+        self.assertEqual(out["xdm.event.id"], "6")
+
 
 if __name__ == "__main__":
     unittest.main()

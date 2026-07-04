@@ -1,0 +1,5 @@
+<149>Jun 30 11:59:41 router1 tmnx: 470021 Base SECURITY-MINOR-tacplus_status - TACACS+ server 10.0.0.9 operational
+<149>Jun 30 11:59:52 router1 tmnx: 470022 Base FILTER-WARNING-maf_entry_match - MAF entry 10 match on interface mgmt
+<149>Jun 30 11:59:58 router1 tmnx: 470023 Base SECURITY-MINOR-cli_user_io - CLI session output truncated for session 7
+<149>Jun 30 12:00:04 router1 tmnx: 470024 Base SECURITY-MAJOR-cli_user_login - User admin1 login from console
+<149>Jun 30 12:00:19 router1 tmnx: 470025 Base SECURITY-MAJOR-cli_user_logout - User admin1 logout from console

@@ -98,6 +98,7 @@ Apply transformation patterns from [transformation-patterns.md](transformation-p
 - Categorical enum routing -- vendor `categories[]` arrays MUST first attempt `xdm.alert.category` via THREAT_CATEGORY constants before falling back to `xdm.alert.subcategory`.
 - One-sided actor mirroring -- when the vendor delivers ONE actor and no counterparty, mirror into BOTH `xdm.source.` and `xdm.target.`.
 - Authentication mandatory mapping -- when `scripts/profile_log.py` flags the sample as an authentication event (or the rule sets the `EVENT_TAG_AUTHENTICATION` tag / an `OPERATION_TYPE_AUTH_*` operation), map the full mandatory 12-field set from [authentication-mapping.md](authentication-mapping.md). The story is only created when every mandatory field is mapped; the linter raises advisory WARN-042 (warning only, exit code stays 0) for each one left unmapped.
+- Network mandatory mapping -- when the profiler flags a network / traffic event (or the rule sets the `EVENT_TAG_NETWORK` tag / a `network` event type), map the full mandatory 20-field set from [network-mapping.md](network-mapping.md), padding absent values with the type-valid placeholders. Advisory WARN-043 flags each one left unmapped. The two detections are independent: a dual event (a VPN login) takes both sets, with the union of the story tags in ONE `xdm.event.tags = arraycreate(...)`.
 
 ## Step 6 -- Write the rule
 

@@ -98,6 +98,37 @@ EXPECTED_TOP_CANDIDATES = {
     "upn": "xdm.source.user.upn",
     "userPrincipalName": "xdm.source.user.upn",
     "user_principal_name": "xdm.source.user.upn",
+    # Network-story mandatory targets (references/network-mapping.md).
+    # bytes_received / recv_bytes / is_internal are curated seeds; the
+    # rest are working corpus precedents pinned against re-cuts.
+    "bytes_received": "xdm.target.sent_bytes",
+    "recv_bytes": "xdm.target.sent_bytes",
+    "is_internal": "xdm.source.is_internal_ip",
+    "dst_ip": "xdm.target.ipv4",
+    "protocol": "xdm.network.ip_protocol",
+    "url_category": "xdm.network.http.url_category",
+    "device_id": "xdm.source.host.device_id",
+    "sent_bytes": "xdm.source.sent_bytes",
+    # AAA gateway tokens (references/authentication-mapping.md, AAA
+    # section). dvc_ip / priv_lvl are curated seeds; the rest are working
+    # precedents pinned against re-cuts.
+    "dvc_ip": "xdm.target.ipv4",
+    "priv_lvl": "xdm.auth.privilege_level",
+    "reason": "xdm.event.outcome_reason",
+    "cmd": "xdm.event.operation_sub_type",
+    "group": "xdm.source.user.groups",
+    # T1/T2 corpus validation seeds (validation/story-corpus): Check Point
+    # s_port is the SOURCE port (vendor-documented; outranks a single
+    # contrary pack precedent), Zscaler NSS cltip/svrip/urlcategory, and
+    # the Zeek conn endpoint tuple (orig = source, resp = target).
+    "s_port": "xdm.source.port",
+    "cltip": "xdm.source.ipv4",
+    "svrip": "xdm.target.ipv4",
+    "urlcategory": "xdm.network.http.url_category",
+    "orig_h": "xdm.source.ipv4",
+    "resp_h": "xdm.target.ipv4",
+    "orig_p": "xdm.source.port",
+    "resp_p": "xdm.target.port",
     "useragent": "xdm.source.user_agent",
     "hostname": "xdm.source.host.hostname",
     "src_port": "xdm.source.port",

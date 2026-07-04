@@ -17,7 +17,9 @@ filter
     _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
     _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
-    _syslog_host = coalesce(_host_5424, _host_3164)
+    _syslog_host_raw = coalesce(_host_5424, _host_3164)
+| alter
+    _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
 | alter
     _pri_facility = to_integer(divide(_pri, 8))
 | alter

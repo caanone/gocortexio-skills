@@ -45,6 +45,8 @@ Schema-aware checks (XDM schema + XDM_CONST loaded from references):
              xdm.event.log_level / xdm.alert.severity.
     WARN-042 Auto-detected authentication event missing a field from the
              authentication-story mandatory set (advisory, never blocks).
+    WARN-043 Auto-detected network event missing a field from the
+             network-story mandatory set (advisory, never blocks).
     INFO-013 Advisory: one underscore temp mapped across 3+ XDM entity
              families (likely over-mapping; event / observer excluded).
 
@@ -1858,12 +1860,13 @@ _AUTH_FIELD_HINT = {
     "(string here, never a list)",
     "xdm.target.port": "map the value, else xdm.target.port = to_integer(0)",
     "xdm.network.ip_protocol": "assign XDM_CONST.IP_PROTOCOL_* "
-    "(IP_PROTOCOL_TCP for interactive auth)",
+    "(pad IP_PROTOCOL_IP when the protocol is absent)",
     "xdm.event.type": 'resolve to a value containing "authentication"',
     "xdm.event.tags": "xdm.event.tags = "
     "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)",
-    "xdm.event.operation": "XDM_CONST.OPERATION_TYPE_AUTH_LOGIN "
-    "(password) or OPERATION_TYPE_AUTH_MFA (involves MFA)",
+    "xdm.event.operation": "derive the specific XDM_CONST.OPERATION_TYPE_* "
+    "(AUTH_LOGIN for a password login, AUTH_MFA for MFA); leave unmapped "
+    "rather than guessing when the event kind is unclear",
     "xdm.event.original_event_type": "carry the raw vendor event name",
     "xdm.event.outcome": "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED only, "
     "on conclusive events",
@@ -1968,6 +1971,42 @@ def _auth_value_issues(path: str, rhs: str) -> List[tuple]:
                 "story cannot correlate the client.",
                 "Map the real client address from the raw log.",
             ))
+    elif path == "xdm.source.user.upn":
+        if _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.source.user.upn is assigned a static literal. The upn "
+                "is the story correlation key and cannot be empty or "
+                "hard-coded -- it must carry the authenticated identity "
+                "from the raw log.",
+                "Derive the upn from the raw principal with the shape "
+                'guard: if(_u contains "@", _u, _u != null, '
+                'concat(_u, "@localhost")).',
+            ))
+        else:
+            # The upn must ALWAYS be UPN-shaped. A bare identifier is only
+            # acceptable when its own name says the source is a UPN
+            # (upn / userPrincipalName / principal / email / mail /
+            # alternateId); any other bare username must go through the
+            # shape-guard idiom.
+            body = rhs.strip().rstrip(",").strip()
+            m = re.fullmatch(r"_?[A-Za-z]\w*", body)
+            if m and body.lower() not in ("null", "true", "false"):
+                name = body.lower()
+                if not any(t in name for t in
+                           ("upn", "principal", "email", "mail",
+                            "alternateid", "alternate_id")):
+                    issues.append((
+                        "This rule models an authentication event, but "
+                        f"xdm.source.user.upn is assigned the bare "
+                        f"identifier '{body}', which may not be UPN-shaped. "
+                        "The upn must ALWAYS be user@domain.",
+                        "Use the shape guard: xdm.source.user.upn = "
+                        f'if({body} contains "@", {body}, {body} != null, '
+                        f'concat({body}, "@localhost")). A direct mapping '
+                        "is only safe when the source field is a UPN by "
+                        "definition (see authentication-mapping.md).",
+                    ))
     elif path == "xdm.target.ipv4":
         if "arraycreate(" in rhs or re.match(r"\s*\[", rhs):
             issues.append((
@@ -2075,7 +2114,12 @@ def _check_warn042(code_lines: List[str]) -> List[dict]:
         if path == "xdm.event.operation" and _AUTH_OPERATION_RE.search(rhs):
             marker_line = a["line"]
             break
-        if path == "xdm.event.type" and "authentication" in rhs.lower():
+        # Marker words are matched against QUOTED LITERALS only -- a temp
+        # named _authentication_kind on the RHS must not classify the rule.
+        if path == "xdm.event.type" and any(
+            "authentication" in lit.lower()
+            for lit in re.findall(r'"([^"]*)"', rhs)
+        ):
             marker_line = a["line"]
             break
         # Broader event signal: an auth literal in an event-classification
@@ -2104,6 +2148,27 @@ def _check_warn042(code_lines: List[str]) -> List[dict]:
                 "(see references/authentication-mapping.md).",
             )
         )
+    # A second xdm.event.tags assignment silently overwrites the first,
+    # dropping its story tag. Reported here for auth-marked rules; when
+    # the NETWORK marker is also present, WARN-043 owns the finding, so
+    # skip it to avoid double-reporting on a dual rule.
+    tags_assigns = [a for a in assigns if a["path"] == "xdm.event.tags"]
+    network_marked = any(
+        "EVENT_TAG_NETWORK" in a["rhs"] for a in tags_assigns
+    )
+    if len(tags_assigns) > 1 and not network_marked:
+        out.append(
+            _violation(
+                "WARN-042",
+                "warning",
+                tags_assigns[1]["line"],
+                "xdm.event.tags is assigned more than once; the later "
+                "assignment overwrites the earlier one, dropping its story "
+                "tag.",
+                "Emit ONE merged xdm.event.tags = arraycreate(...) carrying "
+                "every story tag.",
+            )
+        )
     # Value conformance: a mandatory field that is mapped but carries a
     # forbidden value is as damaging as one left unmapped.
     for field in _AUTH_MANDATORY:
@@ -2116,6 +2181,235 @@ def _check_warn042(code_lines: List[str]) -> List[dict]:
                     "warning",
                     targets[field],
                     f"{msg} (see references/authentication-mapping.md).",
+                    fix,
+                )
+            )
+    return out
+
+
+# ----- WARN-043  network-story mandatory mapping (auto-detected)
+
+
+# Mandatory XDM target set for the network story. Canonical in-bundle
+# source: the "Mandatory fields" table in references/network-mapping.md
+# (mirrored in profile_log.py; the drift-guard test keeps all three
+# aligned).
+_NETWORK_MANDATORY = [
+    "xdm.event.outcome",
+    "xdm.event.type",
+    "xdm.event.tags",
+    "xdm.network.http.http_header.header",
+    "xdm.network.http.http_header.value",
+    "xdm.network.http.url_category",
+    "xdm.network.ip_protocol",
+    "xdm.network.protocol_layers",
+    "xdm.source.host.device_id",
+    "xdm.source.ipv4",
+    "xdm.source.ipv6",
+    "xdm.source.is_internal_ip",
+    "xdm.source.port",
+    "xdm.source.sent_bytes",
+    "xdm.target.host.device_id",
+    "xdm.target.ipv4",
+    "xdm.target.ipv6",
+    "xdm.target.is_internal_ip",
+    "xdm.target.port",
+    "xdm.target.sent_bytes",
+]
+
+_NETWORK_FIELD_HINT = {
+    "xdm.event.outcome": "map allow -> OUTCOME_SUCCESS, deny/drop/block -> "
+    "OUTCOME_FAILED; pad XDM_CONST.OUTCOME_UNKNOWN",
+    "xdm.event.type": 'resolve to a value containing "network"; pad '
+    '"network"',
+    "xdm.event.tags": "xdm.event.tags = "
+    "arraycreate(XDM_CONST.EVENT_TAG_NETWORK) -- one merged arraycreate "
+    "with EVENT_TAG_AUTHENTICATION on a dual event",
+    "xdm.network.http.http_header.header": 'the HTTP header name; map when '
+    'headers are logged, else ""',
+    "xdm.network.http.http_header.value": 'the HTTP header value; map when '
+    'headers are logged, else ""',
+    "xdm.network.http.url_category": "map via an XDM_CONST.URL_CATEGORY_* "
+    "if-chain; pad XDM_CONST.URL_CATEGORY_UNKNOWN",
+    "xdm.network.ip_protocol": "assign XDM_CONST.IP_PROTOCOL_*; pad "
+    "XDM_CONST.IP_PROTOCOL_IP",
+    "xdm.network.protocol_layers": "arraycreate(...) over the known layers "
+    '(highest last); pure pad arraycreate("IP")',
+    "xdm.source.host.device_id": 'map the client device id, else ""',
+    "xdm.source.ipv4": 'map the observed client address; pad "" only when '
+    "the source is IPv6-only",
+    "xdm.source.ipv6": 'map the observed client address; pad "" when '
+    "IPv4-only",
+    "xdm.source.is_internal_ip": "derive via incidr() over RFC 1918; pure "
+    "pad false",
+    "xdm.source.port": "map the value, else xdm.source.port = to_integer(0)",
+    "xdm.source.sent_bytes": "bytes sent by the source, else to_integer(0)",
+    "xdm.target.host.device_id": 'map when known, else ""',
+    "xdm.target.ipv4": 'map the observed address; pad ""',
+    "xdm.target.ipv6": 'map the observed address; pad ""',
+    "xdm.target.is_internal_ip": "derive via incidr() over RFC 1918; pure "
+    "pad false",
+    "xdm.target.port": "map the value, else xdm.target.port = to_integer(0)",
+    "xdm.target.sent_bytes": "bytes sent by the target, else to_integer(0)",
+}
+
+# Network outcome vocabulary: the padding value OUTCOME_UNKNOWN is legal
+# here (unlike the authentication story, which is SUCCESS / FAILED only).
+_NETWORK_OUTCOME_OK = {"OUTCOME_SUCCESS", "OUTCOME_FAILED", "OUTCOME_UNKNOWN"}
+
+
+def _network_value_issues(path: str, rhs: str) -> List[tuple]:
+    """Return [(message, suggestion)] for a mapped mandatory network field
+    whose value violates what the network story demands. Same conservatism
+    as the authentication twin: only a definitively wrong, self-contained
+    construct is flagged; temps, xdm reads, const expressions and function
+    calls are never second-guessed."""
+    issues: List[tuple] = []
+    lits = re.findall(r'"([^"]*)"', rhs)
+
+    if path == "xdm.event.tags":
+        if "EVENT_TAG_" in rhs and "EVENT_TAG_NETWORK" not in rhs:
+            issues.append((
+                "This rule models a network event, but xdm.event.tags "
+                "enumerates tag constants without "
+                "XDM_CONST.EVENT_TAG_NETWORK, the story marker tag.",
+                "Include XDM_CONST.EVENT_TAG_NETWORK in the single "
+                "arraycreate(...) (alongside EVENT_TAG_AUTHENTICATION on a "
+                "dual event).",
+            ))
+    elif path == "xdm.network.ip_protocol":
+        if "IP_PROTOCOL_" not in rhs and _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models a network event, but "
+                "xdm.network.ip_protocol is assigned a raw literal instead "
+                "of the XDM enum.",
+                "Assign XDM_CONST.IP_PROTOCOL_*; the padding value is "
+                "IP_PROTOCOL_TCP.",
+            ))
+    elif path == "xdm.network.protocol_layers":
+        if "arraycreate(" not in rhs and _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models a network event, but "
+                "xdm.network.protocol_layers is assigned a bare scalar. "
+                "Content packs emit this field as an array of layers.",
+                "Wrap the layers in arraycreate(...), highest layer last; "
+                'the pure pad is arraycreate("TCP").',
+            ))
+    elif path == "xdm.event.outcome":
+        bad = sorted(
+            {o for o in _AUTH_OUTCOME_RE.findall(rhs)
+             if o not in _NETWORK_OUTCOME_OK}
+        )
+        if bad:
+            issues.append((
+                "This rule models a network event, but xdm.event.outcome "
+                f"uses {', '.join(bad)}. The network story supports "
+                "OUTCOME_SUCCESS / OUTCOME_FAILED, with OUTCOME_UNKNOWN as "
+                "the padding value.",
+                "Map allow -> OUTCOME_SUCCESS, deny/drop/block -> "
+                "OUTCOME_FAILED; pad OUTCOME_UNKNOWN.",
+            ))
+    elif path == "xdm.event.type":
+        # On a dual event the single event.type string carries the
+        # authentication value and the tags array carries the network
+        # marker, so an "authentication" literal is also acceptable.
+        if lits and not _rhs_has_dynamic(rhs) and not any(
+            ("network" in s.lower()) or ("authentication" in s.lower())
+            for s in lits
+        ):
+            issues.append((
+                "This rule models a network event, but xdm.event.type does "
+                'not resolve to a value containing "network" (or the '
+                "authentication value on a dual event).",
+                'Resolve xdm.event.type to a value containing "network"; '
+                "on a dual event keep the authentication value and carry "
+                "the network marker in xdm.event.tags.",
+            ))
+    return issues
+
+
+def _check_warn043(code_lines: List[str]) -> List[dict]:
+    """Auto-detect a network event and warn (never block) when a field in
+    the authoritative network-story mandatory set is not mapped. Detection
+    is deliberately conservative -- transport fields alone never classify a
+    rule -- so a rule is treated as a network rule only on a definitive
+    marker: the EVENT_TAG_NETWORK tag on xdm.event.tags, or an
+    xdm.event.type value containing "network". When a marker is found,
+    every missing mandatory field is reported at the marker line, a
+    duplicated xdm.event.tags assignment is flagged (the second overwrites
+    the first -- a dual event needs ONE merged arraycreate), and every
+    mapped mandatory field whose value violates the network vocabulary is
+    reported at its own line, with the same only-definitive-literals
+    conservatism as WARN-042. Advisory only (warning severity), so the
+    exit code stays 0. Independent of WARN-042: a dual authentication +
+    network rule receives both advisories. See
+    references/network-mapping.md."""
+    if not _is_model(code_lines):
+        return []
+    assigns = _top_level_xdm_assignments(code_lines)
+    targets = {a["path"]: a["line"] for a in assigns}
+    rhs_by_path = {a["path"]: a["rhs"] for a in assigns}
+    marker_line = None
+    for a in assigns:
+        path, rhs = a["path"], a["rhs"]
+        if path == "xdm.event.tags" and "EVENT_TAG_NETWORK" in rhs:
+            marker_line = a["line"]
+            break
+        # Quoted literals only -- a temp named _network_type on the RHS
+        # must not classify the rule as a network event.
+        if path == "xdm.event.type" and any(
+            "network" in lit.lower()
+            for lit in re.findall(r'"([^"]*)"', rhs)
+        ):
+            marker_line = a["line"]
+            break
+    if marker_line is None:
+        return []
+    out: List[dict] = []
+    for field in _NETWORK_MANDATORY:
+        if field in targets:
+            continue
+        out.append(
+            _violation(
+                "WARN-043",
+                "warning",
+                marker_line,
+                f"This rule models a network event, so {field} is mandatory "
+                "for the XDM network story but is not mapped. A mandatory "
+                "field left unmapped drops the event from the story.",
+                f"Map {field}: {_NETWORK_FIELD_HINT[field]} "
+                "(see references/network-mapping.md).",
+            )
+        )
+    # A dual event must merge its story tags into ONE arraycreate; a second
+    # xdm.event.tags assignment silently overwrites the first.
+    tags_assigns = [a for a in assigns if a["path"] == "xdm.event.tags"]
+    if len(tags_assigns) > 1:
+        out.append(
+            _violation(
+                "WARN-043",
+                "warning",
+                tags_assigns[1]["line"],
+                "xdm.event.tags is assigned more than once; the later "
+                "assignment overwrites the earlier one, dropping its story "
+                "tag.",
+                "Emit ONE merged xdm.event.tags = arraycreate(...) carrying "
+                "every story tag (for a dual event: "
+                "EVENT_TAG_AUTHENTICATION and EVENT_TAG_NETWORK).",
+            )
+        )
+    # Value conformance: a mandatory field mapped to a forbidden value is
+    # as damaging as one left unmapped.
+    for field in _NETWORK_MANDATORY:
+        if field not in rhs_by_path:
+            continue
+        for msg, fix in _network_value_issues(field, rhs_by_path[field]):
+            out.append(
+                _violation(
+                    "WARN-043",
+                    "warning",
+                    targets[field],
+                    f"{msg} (see references/network-mapping.md).",
                     fix,
                 )
             )
@@ -2234,6 +2528,7 @@ def lint(source: str) -> List[dict]:
     findings += _check_warn040(code_lines)
     findings += _check_warn041(code_lines)
     findings += _check_warn042(code_lines)
+    findings += _check_warn043(code_lines)
     findings += _check_info013(code_lines)
 
     findings.sort(key=lambda v: (v["line"], v["rule_id"]))

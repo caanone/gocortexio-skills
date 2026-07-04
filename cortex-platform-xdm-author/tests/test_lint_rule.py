@@ -113,6 +113,7 @@ class TestSyntacticRules(unittest.TestCase):
         ("warn040_vendor_anchored_header.xql", "WARN-040"),
         ("warn041_pri_no_severity.xql", "WARN-041"),
         ("warn042_auth_mandatory.xql", "WARN-042"),
+        ("warn043_network_mandatory.xql", "WARN-043"),
         ("info013_overmapping.xql", "INFO-013"),
     ]
 
@@ -210,7 +211,7 @@ class TestWarn042AuthMandatory(unittest.TestCase):
     _COMPLETE_AUTH = """[MODEL: dataset=acme_idp_raw]
 filter _raw_log != null
 | alter
-    _user = json_extract_scalar(_raw_log, "$.user"),
+    _upn = json_extract_scalar(_raw_log, "$.user"),
     _src = json_extract_scalar(_raw_log, "$.src_ip"),
     _dst = json_extract_scalar(_raw_log, "$.dst_ip"),
     _sport = json_extract_scalar(_raw_log, "$.src_port"),
@@ -226,7 +227,7 @@ filter _raw_log != null
     xdm.event.outcome = if(_result = "success", XDM_CONST.OUTCOME_SUCCESS,
         _result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = _svc,
-    xdm.source.user.upn = _user,
+    xdm.source.user.upn = _upn,
     xdm.source.ipv4 = _src,
     xdm.source.port = to_integer(to_number(_sport)),
     xdm.target.ipv4 = _dst,
@@ -257,14 +258,15 @@ filter _raw_log != null
 
     def test_value_conformance_flags_forbidden_literals(self):
         # All 12 mandatory fields are present, so none should be flagged as
-        # missing. Seven, however, carry a value the authentication story
+        # missing. Eight, however, carry a value the authentication story
         # forbids (event.type, event.operation, event.outcome, auth.service,
-        # source.ipv4, target.ipv4, network.ip_protocol).
+        # source.ipv4, target.ipv4, network.ip_protocol, and the bare
+        # possibly-not-UPN-shaped identifier assigned to source.user.upn).
         source = (FIXTURES / "warn042_auth_bad_values.xql").read_text(
             encoding="utf-8"
         )
         vios = [v for v in lint(source) if v["rule_id"] == "WARN-042"]
-        self.assertEqual(len(vios), 7, [v["message"] for v in vios])
+        self.assertEqual(len(vios), 8, [v["message"] for v in vios])
         self.assertEqual({v["severity"] for v in vios}, {"warning"})
 
     def test_value_conformance_silent_on_temp_sourced_values(self):
@@ -283,7 +285,7 @@ filter _raw_log != null
     xdm.event.original_event_type = action_col,
     xdm.event.outcome = outcome_col,
     xdm.auth.service = svc_col,
-    xdm.source.user.upn = user_col,
+    xdm.source.user.upn = upn_col,
     xdm.source.ipv4 = src_ip,
     xdm.source.port = to_integer(to_number(sport_col)),
     xdm.target.ipv4 = dst_ip,
@@ -705,6 +707,153 @@ class TestWarn039PayloadInDescription(unittest.TestCase):
         self.assertEqual(self._w39(source), [])
 
 
+class TestNetworkMandatoryListsInSync(unittest.TestCase):
+    """The linter and profiler each carry a copy of the network mandatory
+    set. Both must stay identical to the canonical list -- the "Mandatory
+    fields" table in ``references/network-mapping.md`` -- so the advisory
+    WARN-043 and the profiler checklist never drift apart. Fully
+    self-contained: runs in a standalone checkout."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        reference = bundle_root() / "references" / "network-mapping.md"
+        cls.expected = _mandatory_fields_from_reference(reference)
+        if len(cls.expected) != 20:
+            raise AssertionError(
+                "expected 20 mandatory fields in the network reference "
+                "table, found %d" % len(cls.expected)
+            )
+
+    def test_linter_list_matches_reference(self):
+        self.assertEqual(set(_lint_mod._NETWORK_MANDATORY), self.expected)
+
+    def test_profiler_list_matches_reference(self):
+        prof = _load_profiler()
+        self.assertEqual(set(prof._NETWORK_MANDATORY), self.expected)
+
+
+class TestWarn043NetworkMandatory(unittest.TestCase):
+    """WARN-043 auto-detects a network event (conservatively: only the
+    EVENT_TAG_NETWORK marker or a "network" event.type value) and warns,
+    never blocks, per unmapped mandatory network-story field."""
+
+    _COMPLETE_NETWORK = """[MODEL: dataset=acmefw_raw]
+filter _raw_log != null
+| alter
+    _act = json_extract_scalar(_raw_log, "$.action"),
+    _src = json_extract_scalar(_raw_log, "$.src_ip"),
+    _dst = json_extract_scalar(_raw_log, "$.dst_ip"),
+    _sport = json_extract_scalar(_raw_log, "$.src_port"),
+    _dport = json_extract_scalar(_raw_log, "$.dst_port"),
+    _sent = json_extract_scalar(_raw_log, "$.bytes_out"),
+    _rcvd = json_extract_scalar(_raw_log, "$.bytes_in")
+| alter
+    xdm.observer.vendor = "AcmeFW",
+    xdm.event.type = "network",
+    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
+    xdm.event.outcome = if(_act = "allow", XDM_CONST.OUTCOME_SUCCESS, _act != null, XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_UNKNOWN),
+    xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP,
+    xdm.network.protocol_layers = arraycreate("TCP"),
+    xdm.network.http.http_header.header = "",
+    xdm.network.http.http_header.value = "",
+    xdm.network.http.url_category = XDM_CONST.URL_CATEGORY_UNKNOWN,
+    xdm.source.ipv4 = _src,
+    xdm.source.ipv6 = "",
+    xdm.source.is_internal_ip = if(incidr(_src, "10.0.0.0/8"), true, false),
+    xdm.source.port = to_integer(to_number(_sport)),
+    xdm.source.sent_bytes = to_integer(to_number(_sent)),
+    xdm.source.host.device_id = "",
+    xdm.target.ipv4 = _dst,
+    xdm.target.ipv6 = "",
+    xdm.target.is_internal_ip = if(incidr(_dst, "10.0.0.0/8"), true, false),
+    xdm.target.port = to_integer(to_number(_dport)),
+    xdm.target.sent_bytes = to_integer(to_number(_rcvd)),
+    xdm.target.host.device_id = ""
+;
+"""
+
+    def _w43(self, source: str) -> list:
+        return [v for v in lint(source) if v["rule_id"] == "WARN-043"]
+
+    def test_complete_rule_is_silent(self):
+        self.assertEqual(self._w43(self._COMPLETE_NETWORK), [])
+
+    def test_fires_per_missing_field(self):
+        # The fixture maps type, tags and source.ipv4 -> 17 of 20 missing.
+        source = (FIXTURES / "warn043_network_mandatory.xql").read_text(
+            encoding="utf-8"
+        )
+        findings = self._w43(source)
+        self.assertEqual(len(findings), 17, [f["message"] for f in findings])
+        self.assertTrue(all(f["severity"] == "warning" for f in findings))
+
+    def test_event_type_marker_alone_fires(self):
+        # No tag, but event.type resolves to "network" -- still classified.
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    xdm.event.type = "network"\n;\n'
+        )
+        self.assertTrue(self._w43(source))
+
+    def test_dual_rule_gets_both_advisories(self):
+        source = (
+            "[MODEL: dataset=vpn_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _u = json_extract_scalar(_raw_log, "$.user")\n'
+            "| alter\n"
+            '    xdm.event.type = "authentication",\n'
+            "    xdm.event.tags = arraycreate("
+            "XDM_CONST.EVENT_TAG_AUTHENTICATION, "
+            "XDM_CONST.EVENT_TAG_NETWORK),\n"
+            "    xdm.source.user.upn = _u\n;\n"
+        )
+        ids = [v["rule_id"] for v in lint(source)]
+        self.assertIn("WARN-042", ids)
+        self.assertIn("WARN-043", ids)
+
+    def test_duplicate_tags_assignment_flagged(self):
+        source = (
+            "[MODEL: dataset=vpn_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            "    xdm.event.tags = arraycreate("
+            "XDM_CONST.EVENT_TAG_AUTHENTICATION),\n"
+            "    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK)\n"
+            ";\n"
+        )
+        dup = [v for v in self._w43(source) if "more than once" in v["message"]]
+        self.assertEqual(len(dup), 1)
+
+    def test_outcome_conformance_allows_unknown_pad(self):
+        # OUTCOME_UNKNOWN is the documented network padding value; only a
+        # const outside the network vocabulary is flagged.
+        good = self._COMPLETE_NETWORK
+        self.assertEqual(self._w43(good), [])
+        bad = good.replace(
+            "if(_act = \"allow\", XDM_CONST.OUTCOME_SUCCESS, _act != null, "
+            "XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_UNKNOWN)",
+            "XDM_CONST.OUTCOME_PARTIAL",
+        )
+        flagged = [v for v in self._w43(bad) if "OUTCOME_PARTIAL" in v["message"]]
+        self.assertEqual(len(flagged), 1)
+
+    def test_protocol_layers_scalar_literal_flagged(self):
+        bad = self._COMPLETE_NETWORK.replace(
+            'xdm.network.protocol_layers = arraycreate("TCP")',
+            'xdm.network.protocol_layers = "TCP"',
+        )
+        flagged = [v for v in self._w43(bad) if "bare scalar" in v["message"]]
+        self.assertEqual(len(flagged), 1)
+
+    def test_non_network_rules_untouched(self):
+        for fixture in ("clean_rule.xql", "warn042_auth_mandatory.xql"):
+            with self.subTest(fixture=fixture):
+                self.assertNotIn("WARN-043", _rule_ids(fixture))
+
+
 class TestWorkedExamplesLintClean(unittest.TestCase):
     """Behaviour-parity guard: every shipped worked-example rule must lint
     clean (zero error-severity findings). This is the bundle's gold
@@ -742,6 +891,138 @@ class TestWorkedExamplesLintClean(unittest.TestCase):
                     f"{md.name}: worked-example rule should lint clean, "
                     f"got {[(v['rule_id'], v['line']) for v in errors]}",
                 )
+
+
+class TestStoryMarkerEdgeCases(unittest.TestCase):
+    """Edge-case guards for the story markers and value conformance."""
+
+    def test_temp_names_do_not_fire_markers(self):
+        # EC2: marker words are matched against quoted literals only -- a
+        # temp named _network_type / _authentication_kind on the RHS must
+        # not classify the rule into a story.
+        base = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    {temp} = json_extract_scalar(_raw_log, "$.t")\n'
+            "| alter\n"
+            '    xdm.observer.vendor = "V",\n'
+            "    xdm.event.type = {temp}\n;\n"
+        )
+        ids = _rule_ids_from(base.format(temp="_network_type"))
+        self.assertNotIn("WARN-043", ids)
+        ids = _rule_ids_from(base.format(temp="_authentication_kind"))
+        self.assertNotIn("WARN-042", ids)
+        # The literal forms must still classify.
+        lit = base.replace("xdm.event.type = {temp}",
+                           'xdm.event.type = "network"')
+        self.assertIn("WARN-043", _rule_ids_from(lit.format(temp="_t")))
+
+    def test_static_upn_flagged(self):
+        # EC3: upn is the story correlation key -- a static or empty
+        # literal is as damaging as leaving it unmapped.
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _u = json_extract_scalar(_raw_log, "$.u")\n'
+            "| alter\n"
+            '    xdm.observer.vendor = "V",\n'
+            '    xdm.event.type = "authentication",\n'
+            '    xdm.source.user.upn = ""\n;\n'
+        )
+        hits = [v for v in lint(rule)
+                if v["rule_id"] == "WARN-042"
+                and "correlation key" in v["message"]]
+        self.assertEqual(len(hits), 1, hits)
+        # A raw-mapped upn is never second-guessed.
+        ok = rule.replace('xdm.source.user.upn = ""',
+                          "xdm.source.user.upn = _u")
+        self.assertEqual(
+            [v for v in lint(ok) if "correlation key" in v["message"]], []
+        )
+
+    def test_bare_identifier_upn_flagged(self):
+        # The upn must ALWAYS be UPN-shaped: a bare identifier whose name
+        # does not itself indicate a UPN source is flagged; UPN-named
+        # identifiers and the shape-guard idiom stay silent.
+        base = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    {t} = json_extract_scalar(_raw_log, "$.u")\n'
+            "| alter\n"
+            '    xdm.observer.vendor = "V",\n'
+            '    xdm.event.type = "authentication",\n'
+            "    xdm.source.user.upn = {rhs}\n;\n"
+        )
+
+        def shape_hits(t, rhs):
+            return [v for v in lint(base.format(t=t, rhs=rhs))
+                    if "UPN-shaped" in v["message"]]
+
+        self.assertEqual(len(shape_hits("_user", "_user")), 1)
+        self.assertEqual(len(shape_hits("_username", "_username")), 1)
+        self.assertEqual(shape_hits("_upn", "_upn"), [])
+        self.assertEqual(shape_hits("_email", "_email"), [])
+        guard = ('if(_user contains "@", _user, _user != null, '
+                 'concat(_user, "@localhost"))')
+        self.assertEqual(shape_hits("_user", guard), [])
+
+    def test_duplicate_tags_flagged_on_auth_only_rule(self):
+        # EC7: the overwrite hazard exists without any network marker.
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    xdm.observer.vendor = "V",\n'
+            '    xdm.event.type = "authentication",\n'
+            "    xdm.event.tags = arraycreate("
+            "XDM_CONST.EVENT_TAG_AUTHENTICATION),\n"
+            "    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_MFA)\n;\n"
+        )
+        dups = [v for v in lint(rule) if "more than once" in v["message"]]
+        self.assertEqual(len(dups), 1)
+        self.assertEqual(dups[0]["rule_id"], "WARN-042")
+        # On a dual rule the finding belongs to WARN-043 and is reported
+        # exactly once, never doubled.
+        dual = rule.replace("EVENT_TAG_MFA", "EVENT_TAG_NETWORK")
+        dups2 = [v for v in lint(dual) if "more than once" in v["message"]]
+        self.assertEqual(len(dups2), 1)
+        self.assertEqual(dups2[0]["rule_id"], "WARN-043")
+
+
+def _rule_ids_from(source: str) -> list:
+    return [v["rule_id"] for v in lint(source)]
+
+
+class TestMultiFormatExamplesFullyClean(unittest.TestCase):
+    """The multi-format walkthroughs (06 Okta, 07 FortiGate, 08 TACACS+)
+    are the story gold standards: EVERY rule block in them must lint with
+    zero findings of ANY severity -- no WARN-042/043 stragglers, no
+    envelope warnings -- not merely zero errors."""
+
+    _EXAMPLES = (
+        "06-okta-authentication-multi-format.md",
+        "07-fortigate-network-multi-format.md",
+        "08-cisco-tacacs-aaa-multi-shape.md",
+    )
+
+    def test_every_block_completely_clean(self):
+        we_dir = bundle_root() / "references" / "worked-examples"
+        for name in self._EXAMPLES:
+            doc = (we_dir / name).read_text(encoding="utf-8")
+            rules = re.findall(r"(\[MODEL:.*?;)", doc, re.DOTALL)
+            self.assertTrue(rules, f"{name}: no MODEL blocks found")
+            for i, rule in enumerate(rules):
+                with self.subTest(example=name, block=i):
+                    findings = lint(rule)
+                    self.assertEqual(
+                        findings,
+                        [],
+                        f"{name} block {i}: expected zero findings, got "
+                        f"{[(v['rule_id'], v['line']) for v in findings]}",
+                    )
 
 
 class TestCascadeHint(unittest.TestCase):

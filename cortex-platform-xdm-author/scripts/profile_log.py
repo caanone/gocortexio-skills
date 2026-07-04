@@ -31,8 +31,16 @@ Output is a JSON worksheet on stdout:
         {"path": "transactions[]",
          "discriminator": "phase",
          "values": ["request", "response"]}
-      ]
+      ],
+      "authentication": {"detected": bool, "signals": [...],
+                         "mandatory_fields": [...]},
+      "network": {"detected": bool, "signals": [...],
+                  "mandatory_fields": [...]}
     }
+
+The ``authentication`` and ``network`` blocks are independent story
+detections (an event can be both -- xdm.event.tags takes the union);
+each carries the mandatory XDM field set for its story when detected.
 
 ``null_rate`` is per top-level record. For a field inside an object-
 array, multiple elements within a single record collapse to one
@@ -86,8 +94,12 @@ _LEEF_HEADER_RE = re.compile(r"^LEEF:\d+\.\d+\|")
 _SYSLOG_5424_RE = re.compile(
     r"^<\d{1,3}>\d{1,2}\s+\d{4}-\d{2}-\d{2}T"  # <PRI>VERSION YYYY-MM-DDT...
 )
+# The priority token is optional as a WHOLE GROUP: a relay can strip the
+# <NNN> entirely (the case syslog-envelope.md documents), and the old
+# pattern's `>?` only made the closing bracket optional, so those lines
+# fell through to "unknown".
 _SYSLOG_3164_RE = re.compile(
-    r"^<\d{1,3}>?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s"
+    r"^(?:<\d{1,3}>)?[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s"
 )
 _KV_LINE_RE = re.compile(r"^\s*[a-zA-Z_][\w.-]*=\S")
 
@@ -201,7 +213,11 @@ def parse_records(text: str, fmt: str) -> List[dict]:
         delim = "," if fmt == "csv" else "\t"
         rdr = csv.DictReader(io.StringIO(text), delimiter=delim)
         return [dict(row) for row in rdr]
-    return []
+    # Unknown / positional text (for example a raw AWS VPC Flow export):
+    # expose each line as _message, exactly like the syslog wrapper, so
+    # the value-signal story detection still runs over the content
+    # instead of silently seeing zero records.
+    return [{"_message": ln} for ln in _non_blank_lines(text)]
 
 
 def _non_blank_lines(text: str) -> List[str]:
@@ -726,7 +742,8 @@ _AUTH_MANDATORY = [
 _AUTH_NAME_RE = re.compile(
     r"(?<![a-z])("
     r"logon|logoff|login|logout|signin|signon|sign_in|sign_on|"
-    r"authentication|authn|auth|mfa|2fa|otp|sso|saml|oauth|oidc|"
+    r"authentication|authorization|authorized|unauthorized|authz|"
+    r"authn|auth|mfa|2fa|otp|sso|saml|oauth|oidc|"
     r"kerberos|ntlm|credential|password|passwd|upn|idp"
     r")(?![a-z])"
 )
@@ -738,14 +755,20 @@ _AUTH_NAME_RE = re.compile(
 # matches ("sso" inside "lesson", "otp" inside "crypto", "saml" inside a
 # hostname). The leading boundary allows "_" / "-" so vendor mnemonics
 # such as ssh_user_login and cli_user_login_failed still match "login".
+# The trailing (?![a-z0-9=]) guard excludes tokens that are immediately
+# followed by "=": inside a syslog / kv message, "login=alice" is a FIELD
+# NAME carrying user attribution (a proxy web log, for example), not a
+# login event. Event descriptions ("Logged in Successfully",
+# "action=login", "ssl-login") are unaffected.
 _AUTH_VALUE_RE = re.compile(
     r"(?<![a-z0-9])("
     r"logon|logoff|login|logout|logged[ _-]?in|logged[ _-]?out|"
     r"sign[ _-]?in|sign[ _-]?on|signin|signon|"
     r"authentication|authenticated|auth success|auth failure|"
+    r"authorization|authorized|unauthorized|"
     r"mfa|multi-factor|two-factor|2fa|otp|sso|saml|kerberos|"
     r"password|credential"
-    r")(?![a-z0-9])",
+    r")(?![a-z0-9=])",
     re.IGNORECASE,
 )
 
@@ -825,6 +848,214 @@ def detect_authentication(
     return out
 
 
+# --------------------------------------------------------------------
+# Network-event detection
+# --------------------------------------------------------------------
+
+# Mandatory XDM target set for the network story. Mirrors
+# _NETWORK_MANDATORY in lint_rule.py (which raises the advisory
+# WARN-043). Canonical in-bundle source: the "Mandatory fields" table in
+# references/network-mapping.md (the drift-guard test keeps all three
+# aligned).
+_NETWORK_MANDATORY = [
+    "xdm.event.outcome",
+    "xdm.event.type",
+    "xdm.event.tags",
+    "xdm.network.http.http_header.header",
+    "xdm.network.http.http_header.value",
+    "xdm.network.http.url_category",
+    "xdm.network.ip_protocol",
+    "xdm.network.protocol_layers",
+    "xdm.source.host.device_id",
+    "xdm.source.ipv4",
+    "xdm.source.ipv6",
+    "xdm.source.is_internal_ip",
+    "xdm.source.port",
+    "xdm.source.sent_bytes",
+    "xdm.target.host.device_id",
+    "xdm.target.ipv4",
+    "xdm.target.ipv6",
+    "xdm.target.is_internal_ip",
+    "xdm.target.port",
+    "xdm.target.sent_bytes",
+]
+
+# Network detection is deliberately more conservative than authentication
+# detection: an IP or a port appears in almost every log, so transport
+# fields alone NEVER mark a sample as a network event. Only distinctive
+# traffic vocabulary counts as a name signal.
+_NETWORK_NAME_RE = re.compile(
+    r"(?<![a-z])("
+    r"firewall|netflow|flow|traffic|conn|connection|packets|packet|pkts|"
+    r"bytes_sent|bytes_received|sent_bytes|recv_bytes|bytes_in|bytes_out|"
+    r"ip_protocol"
+    r")(?![a-z])"
+)
+
+# Value signal, in two families. These carry detection on syslog /
+# positional formats, where every line collapses into a single _message
+# field and only values are visible.
+#
+# The ACTION family (allow / deny / drop / ...) is ambiguous on its own:
+# an AAA gateway (TACACS+, RADIUS, ISE) logs PERMIT / DENY as an
+# AUTHENTICATION decision, with no transport flow behind it. So when the
+# sample is already detected as an authentication event and the ONLY
+# network evidence is action-family values -- no traffic vocabulary in
+# the field names, no transport 5-tuple, no protocol-family token --
+# detection is suppressed: the permit/deny belongs to the auth story.
+# The PROTOCOL family (tcp / udp / icmp) is unambiguous flow evidence
+# and always counts.
+_NETWORK_ACTION_VALUE_RE = re.compile(
+    r"(?<![a-z0-9])("
+    r"allow|allowed|permit|permitted|deny|denied|drop|dropped|"
+    r"block|blocked|reset|accept|accepted|reject|rejected"
+    r")(?![a-z0-9=])",
+    re.IGNORECASE,
+)
+_NETWORK_PROTO_VALUE_RE = re.compile(
+    r"(?<![a-z0-9])(tcp|udp|icmp)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+# Transport-pair evidence: TWO or more IPv4:port tokens inside one value
+# string describe both ends of a connection (src=IP:PORT ... dst=IP:PORT)
+# and are unambiguous flow evidence even without a protocol word. One
+# lone IP:port is NOT enough -- diagnostic lines routinely quote a single
+# peer ("request from 10.0.76.10:40548") without describing any flow.
+_NETWORK_ENDPOINT_RE = re.compile(
+    r"\b\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}\b"
+)
+
+# Structural signal: a complete transport 5-tuple named in the schema --
+# both endpoint addresses, a port, and a protocol. Any one of these alone
+# is NOT a signal; only the complete tuple is.
+_TUPLE_SRC_IP_RE = re.compile(r"(?:^|[._])(?:src|source|client)[._]?(?:ip|addr)")
+_TUPLE_DST_IP_RE = re.compile(
+    r"(?:^|[._])(?:dst|dest|destination|remote|server)[._]?(?:ip|addr)"
+)
+_TUPLE_PORT_RE = re.compile(r"(?:^|[._])[a-z_]*port(?:$|[._])")
+_TUPLE_PROTO_RE = re.compile(r"(?:^|[._])proto(?:col)?(?:$|[._])")
+
+_NETWORK_SIGNAL_CAP = 24
+
+
+def detect_network(
+    fields: dict,
+    records: "Optional[List[dict]]" = None,
+    auth_detected: bool = False,
+) -> dict:
+    """Auto-detect whether the sample is a network / traffic event.
+
+    Deliberately conservative (an IP alone never fires). Three signals:
+      * name      -- a field path carries distinctive traffic vocabulary
+                     (firewall / flow / traffic / conn / packets / byte
+                     counters), never a bare address or port name.
+      * value     -- a record value matches the allow / deny action
+                     family or a bare protocol name (tcp / udp / icmp).
+                     Scans every record when supplied, which is what
+                     carries detection on syslog formats where the whole
+                     line is one _message value.
+      * structure -- the complete transport 5-tuple is named: source
+                     address, destination address, a port, and a
+                     protocol all present in the field paths.
+
+    Precision rule for AAA sources: when ``auth_detected`` is True and
+    the only evidence is action-family values (permit / deny / ...),
+    detection is suppressed -- on a TACACS+ / RADIUS / ISE gateway those
+    words are the AUTHENTICATION outcome, not a network action, and the
+    records carry no transport flow. Any name signal, structure signal,
+    or protocol-family token lifts the suppression.
+
+    Otherwise independent of detect_authentication: a VPN login carries
+    both signals and receives both worksheet blocks (the event is BOTH
+    stories; xdm.event.tags takes the union). Detection feeds the
+    advisory WARN-043 in lint_rule.py -- it never blocks. See
+    references/network-mapping.md."""
+    signals: List[dict] = []
+    seen: set = set()
+    non_action_evidence = False
+
+    def _add(field: str, match: str, kind: str) -> None:
+        key = (kind, field, match)
+        if key not in seen:
+            seen.add(key)
+            signals.append({"field": field, "match": match, "kind": kind})
+
+    paths = [info.get("path", "") for info in fields.values()]
+
+    # Name signal -- distinctive traffic vocabulary only.
+    for path in paths:
+        m = _NETWORK_NAME_RE.search(path.lower())
+        if m:
+            _add(path, m.group(1), "name")
+            non_action_evidence = True
+
+    # Structural signal -- the complete 5-tuple.
+    lower_paths = [p.lower() for p in paths]
+    if (
+        any(_TUPLE_SRC_IP_RE.search(p) for p in lower_paths)
+        and any(_TUPLE_DST_IP_RE.search(p) for p in lower_paths)
+        and any(_TUPLE_PORT_RE.search(p) for p in lower_paths)
+        and any(_TUPLE_PROTO_RE.search(p) for p in lower_paths)
+    ):
+        _add("(field set)", "src+dst+port+protocol", "structure")
+        non_action_evidence = True
+
+    # Value signal -- scan all records when available, else fall back to
+    # the per-field representative samples.
+    def _scan_value(path: str, value: str) -> None:
+        nonlocal non_action_evidence
+        pm = _NETWORK_PROTO_VALUE_RE.search(value)
+        if pm:
+            _add(path, pm.group(1).lower(), "value")
+            non_action_evidence = True
+        if len(_NETWORK_ENDPOINT_RE.findall(value)) >= 2:
+            _add(path, "ip:port pair", "value")
+            non_action_evidence = True
+        am = _NETWORK_ACTION_VALUE_RE.search(value)
+        if am:
+            _add(path, am.group(1).lower(), "value")
+
+    if records:
+        for rec in records:
+            for path, value in flatten_record(rec).items():
+                if isinstance(value, str):
+                    _scan_value(path, value)
+            if len(signals) >= _NETWORK_SIGNAL_CAP:
+                break
+    else:
+        for info in fields.values():
+            sample = info.get("sample")
+            if isinstance(sample, str):
+                _scan_value(info.get("path", ""), sample)
+
+    # AAA precision rule: action-family words inside an authentication
+    # context, with no other flow evidence, are the auth outcome
+    # vocabulary (PERMIT / DENY), not a network action.
+    if signals and auth_detected and not non_action_evidence:
+        return {
+            "detected": False,
+            "signals": [],
+            "suppressed": (
+                "action-family values (permit / deny / ...) inside an "
+                "authentication event with no transport-flow evidence; "
+                "treated as the authentication outcome vocabulary, not a "
+                "network action"
+            ),
+        }
+
+    detected = bool(signals)
+    out: dict = {"detected": detected, "signals": signals[:12]}
+    if detected:
+        out["mandatory_fields"] = list(_NETWORK_MANDATORY)
+        out["guidance"] = (
+            "Network signal detected. Map the full mandatory XDM field "
+            "set for the network story (see references/network-mapping.md). "
+            "Enforcement is advisory (lint WARN-043), never a block."
+        )
+    return out
+
+
 def profile(source_path: str, text: str) -> dict:
     fmt = detect_format(text)
     try:
@@ -837,12 +1068,16 @@ def profile(source_path: str, text: str) -> dict:
     reverse_index = build_reverse_index(load_anchors())
     attach_xdm_candidates(fields, reverse_index)
 
+    auth_block = detect_authentication(fields, records)
     return {
         "source": source_path,
         "detected_format": fmt,
         "record_count": len(records),
         "recommended_pattern": recommend_pattern(fmt, arrays),
-        "authentication": detect_authentication(fields, records),
+        "authentication": auth_block,
+        "network": detect_network(
+            fields, records, auth_detected=bool(auth_block.get("detected"))
+        ),
         "fields": list(fields.values()),
         "object_arrays": arrays,
     }
@@ -888,6 +1123,19 @@ def _format_text(worksheet: dict) -> str:
         lines.append(
             "  map the mandatory set (advisory WARN-042): "
             + ", ".join(auth.get("mandatory_fields", []))
+        )
+    net = worksheet.get("network") or {}
+    if net.get("detected"):
+        sigs = net.get("signals", [])
+        shown = ", ".join(
+            f"{s['field']}({s['match']})" for s in sigs[:5]
+        )
+        lines.append("")
+        lines.append("network:")
+        lines.append(f"  detected -- {len(sigs)} signal(s): {shown}")
+        lines.append(
+            "  map the mandatory set (advisory WARN-043): "
+            + ", ".join(net.get("mandatory_fields", []))
         )
     if worksheet["object_arrays"]:
         lines.append("")
