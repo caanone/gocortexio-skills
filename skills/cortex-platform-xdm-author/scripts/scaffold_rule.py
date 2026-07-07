@@ -113,10 +113,26 @@ _SYSLOG_ENVELOPE_TARGETS = {
 # AUTH_LOGIN) would assert an operation the log may not describe. It is a
 # must-extract TODO instead -- the author derives the specific member, or
 # leaves it unmapped when the event kind is unclear.
+# xdm.source.user.identity_type IS padded, with IDENTITY_TYPE_USER: an
+# authentication event carries a mandatory UPN, so the principal is a
+# human user in the overwhelming majority of cases. This is not the
+# operation problem -- USER is entailed by the auth context, not guessed,
+# and a neutral member (IDENTITY_TYPE_UNKNOWN) exists as a fall-back. The
+# author refines to MACHINE ($-suffixed account), BUILTIN (SYSTEM /
+# service) or VIRTUAL (managed) per references/authentication-mapping.md.
+# xdm.source.user.user_type is padded with USER_TYPE_REGULAR, the ~90%
+# default (the enum has no UNKNOWN member). The scaffolder cannot key a
+# derivation off the principal (the upn/username temp is not fixed here),
+# so it seeds the safe default and the header lists user_type as a field
+# to refine: the author replaces the pad with the name-convention match
+# idiom ($ -> MACHINE_ACCOUNT; svc_/service/gserviceaccount ->
+# SERVICE_ACCOUNT; else REGULAR) from references/authentication-mapping.md.
 _AUTH_PADDABLE = [
     ("xdm.auth.service", '"IDP"'),
     ("xdm.network.ip_protocol", "XDM_CONST.IP_PROTOCOL_IP"),
     ("xdm.source.port", "to_integer(0)"),
+    ("xdm.source.user.identity_type", "XDM_CONST.IDENTITY_TYPE_USER"),
+    ("xdm.source.user.user_type", "XDM_CONST.USER_TYPE_REGULAR"),
     ("xdm.target.ipv4", '""'),
     ("xdm.target.port", "to_integer(0)"),
 ]

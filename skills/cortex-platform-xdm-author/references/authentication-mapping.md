@@ -67,7 +67,7 @@ xdm read, or a const expression is never second-guessed. The linter never
 blocks on this and the exit code stays 0. The author decides; the warning
 is a reminder.
 
-## Mandatory fields (all 12 must be mapped)
+## Mandatory fields (all 14 must be mapped)
 
 | XDM target | Type | Notes |
 | --- | --- | --- |
@@ -83,6 +83,8 @@ is a reminder.
 | `xdm.event.outcome` | string (enum) | Only `XDM_CONST.OUTCOME_SUCCESS` or `XDM_CONST.OUTCOME_FAILED`, and only on conclusive events. Do not set on intermediate steps. |
 | `xdm.auth.service` | string | Role in the flow: `"SP"` (service provider, initiates) or `"IDP"` (identity provider, validates). The same system can be IDP in one event and SP in another, so map per event type. |
 | `xdm.source.user.upn` | string | The authenticated identity, ALWAYS UPN-shaped (`jane.doe@company.com`). Cannot be empty. This is the central correlation key across IdPs -- it is `upn`, not `username`. When the raw identity may be bare, synthesise the shape: `if(_username contains "@", _username, _username != null, concat(_username, "@localhost"))`. |
+| `xdm.source.user.identity_type` | string (enum) | The nature of the authenticated principal. Derive the `XDM_CONST.IDENTITY_TYPE_*` member: `IDENTITY_TYPE_USER` for a human principal (the common case -- anytime a real UPN is present), `IDENTITY_TYPE_MACHINE` for a computer account (name ends `$`), `IDENTITY_TYPE_BUILTIN` for a well-known OS account, `IDENTITY_TYPE_VIRTUAL` for a managed / virtual account. Fall back to `IDENTITY_TYPE_UNKNOWN` only when no principal resolves. See "Deriving xdm.source.user.identity_type" below. |
+| `xdm.source.user.user_type` | string (enum) | The account class. Derive the `XDM_CONST.USER_TYPE_*` member: `USER_TYPE_REGULAR` is the default (~90% of principals), `USER_TYPE_MACHINE_ACCOUNT` when the account name ends `$`, `USER_TYPE_SERVICE_ACCOUNT` for a service-account naming convention (`svc_` / `svc-` prefix, `service` in the name, a GCP `*.iam.gserviceaccount.com` identity). ALWAYS emit the derivation (defaulting to `USER_TYPE_REGULAR`), keyed on an explicit account-type field when the log carries one, otherwise on the principal name. See "Deriving xdm.source.user.user_type" below. Distinct from `xdm.source.user.identity_type`. |
 
 Placeholder policy for the mandatory set:
 
@@ -143,9 +145,109 @@ contains "login", XDM_CONST.OPERATION_TYPE_AUTH_LOGIN)`. Only when the
 event kind is genuinely ambiguous does the field stay unmapped -- the
 advisory WARN-042 then reminds, which is correct.
 
+## Deriving xdm.source.user.identity_type
+
+`xdm.source.user.identity_type` classifies the nature of the
+authenticated principal. It is a scalar `XDM_CONST.IDENTITY_TYPE_*`
+enum, and unlike `xdm.event.operation` it HAS a neutral member
+(`IDENTITY_TYPE_UNKNOWN`), so a safe fall-back always exists. Even so,
+derive the specific member: an authentication event carries a mandatory
+UPN, so the principal is almost always a human user.
+
+The derivation is on the principal value (and any explicit account-type
+field), not on the log format -- the same logic applies to JSON and to
+a syslog payload once the account has been extracted into a temp. Check
+the signals in order:
+
+| Principal / account signal | identity_type |
+| --- | --- |
+| An explicit vendor account-type field says machine / computer / device | `XDM_CONST.IDENTITY_TYPE_MACHINE` |
+| Account name ends with `$` (AD computer account, e.g. `WIN-DC01$`) | `XDM_CONST.IDENTITY_TYPE_MACHINE` |
+| Managed / virtual identity: `NT SERVICE\...`, gMSA, IIS app-pool | `XDM_CONST.IDENTITY_TYPE_VIRTUAL` |
+| Well-known OS account: `SYSTEM`, `LOCAL SERVICE`, `NETWORK SERVICE`, `ANONYMOUS LOGON`, `root` | `XDM_CONST.IDENTITY_TYPE_BUILTIN` |
+| A human principal -- a UPN, email, or ordinary username (the common case) | `XDM_CONST.IDENTITY_TYPE_USER` |
+| No principal resolves / genuinely indeterminate | `XDM_CONST.IDENTITY_TYPE_UNKNOWN` |
+
+When the log carries an explicit account-type field, key on it first --
+it is more reliable than name-shape heuristics. Otherwise derive from
+the principal name. A representative if() chain over an extracted
+`_principal` temp:
+
+```
+    xdm.source.user.identity_type = if(
+        _principal = null, XDM_CONST.IDENTITY_TYPE_UNKNOWN,
+        _principal contains "$", XDM_CONST.IDENTITY_TYPE_MACHINE,
+        _principal contains "NT SERVICE", XDM_CONST.IDENTITY_TYPE_VIRTUAL,
+        lowercase(_principal) ~= "^(system|local service|network service|anonymous logon|root)$",
+            XDM_CONST.IDENTITY_TYPE_BUILTIN,
+        XDM_CONST.IDENTITY_TYPE_USER)
+```
+
+When every principal in the source is a human login (a typical IdP or
+SaaS feed), the short form is enough: `if(_principal != null,
+XDM_CONST.IDENTITY_TYPE_USER, XDM_CONST.IDENTITY_TYPE_UNKNOWN)`.
+
+Note: `xdm.source.user.identity_type` (the nature of the account --
+USER / MACHINE / BUILTIN / VIRTUAL) is distinct from
+`xdm.source.user.user_type` (the account class -- REGULAR / SERVICE /
+MACHINE), the next mandatory field. Map both.
+
+## Deriving xdm.source.user.user_type
+
+`xdm.source.user.user_type` is a scalar `XDM_CONST.USER_TYPE_*` enum
+with three members: `USER_TYPE_REGULAR` (a normal interactive account),
+`USER_TYPE_SERVICE_ACCOUNT` (an account a program runs as), and
+`USER_TYPE_MACHINE_ACCOUNT` (a computer / host account). There is no
+UNKNOWN member, so `USER_TYPE_REGULAR` is the default -- it is correct
+for the ~90% of authentication events that are human logins.
+
+A log rarely states the account class outright, so ALWAYS emit the
+derivation rather than a bare default: key on an explicit account-type
+field when the vendor provides one, otherwise match the principal name
+against the well-known service- and machine-account conventions, and
+fall through to `USER_TYPE_REGULAR`.
+
+Explicit account-type field first. Our anchor dictionary records these
+vendor field names for the account class: `user_type`, `usertype`,
+`type`, `cloud_account_type`, and `event_useridentity_type` (AWS
+CloudTrail `userIdentity.type`). When one is present, map its value:
+`AWSService` / a value containing `service` -> `USER_TYPE_SERVICE_ACCOUNT`;
+a value containing `machine` / `computer` -> `USER_TYPE_MACHINE_ACCOUNT`;
+otherwise `USER_TYPE_REGULAR`.
+
+Name-convention fallback (real-world patterns, not invented):
+
+| Principal / account-name signal | user_type |
+| --- | --- |
+| Name ends with `$` (AD computer account; a gMSA is treated as a computer account and also ends `$`) | `XDM_CONST.USER_TYPE_MACHINE_ACCOUNT` |
+| `svc_` / `svc-` prefix (Microsoft-recommended service-account convention, e.g. `svc_backup`, `svc-HRDataConnector`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
+| `service` anywhere in the name (`service_`, `_service`, `*service*`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
+| GCP service account (`*.iam.gserviceaccount.com`; service agents are prefixed `service-`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
+| Unix daemon accounts (`www-data`, `nobody`, `daemon`, and similar) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
+| Anything else (a human principal -- the default) | `XDM_CONST.USER_TYPE_REGULAR` |
+
+A representative if() chain over an extracted `_principal` temp
+(machine before service, so a gMSA `$` account is classed as a machine
+account; `~=` is a regex match, so one alternation covers the service
+conventions):
+
+```
+    xdm.source.user.user_type = if(
+        _principal = null, XDM_CONST.USER_TYPE_REGULAR,
+        _principal contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_principal) ~= "^svc[-_]|service|gserviceaccount|^www-data$|^nobody$|^daemon$",
+            XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR)
+```
+
+These are heuristics: a real user whose name happens to contain
+"service" is misclassified, but the cost is low and `USER_TYPE_REGULAR`
+catches everything the patterns miss. Only extend the service-account
+pattern list from real vendor conventions -- never invent a prefix.
+
 ## Worked shape (JSON source)
 
-A complete MODEL rule that maps all 12 mandatory fields. The extraction
+A complete MODEL rule that maps all 14 mandatory fields. The extraction
 stage changes per format; the assignment stage does not.
 
 ```
@@ -171,6 +273,15 @@ filter
         _result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = "IDP",
     xdm.source.user.upn = _upn,
+    xdm.source.user.identity_type = if(
+        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        XDM_CONST.IDENTITY_TYPE_UNKNOWN),
+    xdm.source.user.user_type = if(
+        _upn = null, XDM_CONST.USER_TYPE_REGULAR,
+        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_upn) ~= "^svc[-_]|service|gserviceaccount",
+            XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src_ip,
     xdm.source.port = to_integer(to_number(_src_port)),
     xdm.target.ipv4 = "",
@@ -191,7 +302,6 @@ them when present; omit them otherwise.
 | `xdm.event.operation_sub_type` | The auth method (`password`, `sms`, `voice`, `application`, and similar). Distinct from the mandatory `xdm.event.operation`. |
 | `xdm.source.user.identifier` | Persistent canonical id (GUID / SID). |
 | `xdm.source.user.username` | Human-readable display name. NOT the identity key. |
-| `xdm.source.user.user_type` | `XDM_CONST.USER_TYPE_REGULAR` / `USER_TYPE_SERVICE_ACCOUNT` / `USER_TYPE_MACHINE_ACCOUNT`. |
 | `xdm.source.user_agent` | Full user-agent string of the client. |
 | `xdm.auth.privilege_level` | `XDM_CONST.PRIVILEGE_LEVEL_GUEST` / `PRIVILEGE_LEVEL_USER` / `PRIVILEGE_LEVEL_ADMIN` / `PRIVILEGE_LEVEL_SYSTEM`. |
 | `xdm.logon.type` | `XDM_CONST.LOGON_TYPE_INTERACTIVE` / `LOGON_TYPE_SERVICE`. |

@@ -365,7 +365,7 @@ class TestAuthenticationDetection(unittest.TestCase):
         ws = _profile_fixture("auth_event.jsonl")
         auth = ws["authentication"]
         self.assertTrue(auth["detected"], auth)
-        self.assertEqual(len(auth["mandatory_fields"]), 12)
+        self.assertEqual(len(auth["mandatory_fields"]), 14)
         self.assertIn("xdm.source.user.upn", auth["mandatory_fields"])
         self.assertTrue(auth["signals"], "expected at least one signal")
 
@@ -398,7 +398,7 @@ class TestAuthenticationDetection(unittest.TestCase):
         self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
         auth = ws["authentication"]
         self.assertTrue(auth["detected"], auth)
-        self.assertEqual(len(auth["mandatory_fields"]), 12)
+        self.assertEqual(len(auth["mandatory_fields"]), 14)
         value_signals = [s for s in auth["signals"] if s["kind"] == "value"]
         self.assertTrue(value_signals, auth["signals"])
         self.assertTrue(

@@ -161,6 +161,15 @@ filter
     xdm.source.user.upn = if(
         _user contains "@", _user,
         _user != null, concat(_user, "@localhost")),
+    xdm.source.user.identity_type = if(
+        _user != null, XDM_CONST.IDENTITY_TYPE_USER,
+        XDM_CONST.IDENTITY_TYPE_UNKNOWN),
+    xdm.source.user.user_type = if(
+        _user = null, XDM_CONST.USER_TYPE_REGULAR,
+        _user contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_user) ~= "^svc[-_]|service|gserviceaccount",
+            XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.user.username = _user,
     xdm.source.user.groups = if(_az_group != null, arraycreate(_az_group), null),
     xdm.source.ipv4 = _src_ip,
@@ -232,7 +241,7 @@ NOT MAPPED
 ```
 [ ] chatter filtered by discriminator before any extraction
 [ ] Stage 0 envelope: PRI-anchored host + priority decode (WARN-040/041)
-[ ] all 12 authentication mandatory fields mapped or padded (WARN-042)
+[ ] all 14 authentication mandatory fields mapped or padded (WARN-042)
 [ ] EVENT_TAG_AUTHENTICATION only -- no network tag without a transport flow
 [ ] outcome null on accounting lifecycle rows; SUCCESS / FAILED elsewhere
 [ ] upn ALWAYS UPN-shaped: contains-@ passthrough, else concat(_user, "@localhost")

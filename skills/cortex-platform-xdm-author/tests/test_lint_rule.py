@@ -188,11 +188,11 @@ class TestAuthMandatoryListsInSync(unittest.TestCase):
             / "authentication-mapping.md"
         )
         cls.expected = _mandatory_fields_from_reference(reference)
-        # The reference heading promises exactly 12 mandatory fields; a
+        # The reference heading promises exactly 14 mandatory fields; a
         # mismatch means the table itself drifted.
-        if len(cls.expected) != 12:
+        if len(cls.expected) != 14:
             raise AssertionError(
-                "expected 12 mandatory fields in the reference table, "
+                "expected 14 mandatory fields in the reference table, "
                 "found %d" % len(cls.expected)
             )
 
@@ -228,6 +228,13 @@ filter _raw_log != null
         _result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = _svc,
     xdm.source.user.upn = _upn,
+    xdm.source.user.identity_type = if(
+        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        XDM_CONST.IDENTITY_TYPE_UNKNOWN),
+    xdm.source.user.user_type = if(
+        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_upn) ~= "^svc[-_]|service", XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src,
     xdm.source.port = to_integer(to_number(_sport)),
     xdm.target.ipv4 = _dst,
@@ -238,8 +245,8 @@ filter _raw_log != null
 
     def test_fires_for_each_missing_mandatory_field(self):
         ids = _rule_ids("warn042_auth_mandatory.xql")
-        # The fixture maps 5 of 12 mandatory fields, so 7 should be flagged.
-        self.assertEqual(ids.count("WARN-042"), 7, ids)
+        # The fixture maps 5 of 14 mandatory fields, so 9 should be flagged.
+        self.assertEqual(ids.count("WARN-042"), 9, ids)
 
     def test_only_warning_severity_so_exit_stays_zero(self):
         source = (FIXTURES / "warn042_auth_mandatory.xql").read_text(
@@ -257,11 +264,13 @@ filter _raw_log != null
         self.assertNotIn("WARN-042", ids)
 
     def test_value_conformance_flags_forbidden_literals(self):
-        # All 12 mandatory fields are present, so none should be flagged as
+        # All 14 mandatory fields are present, so none should be flagged as
         # missing. Eight, however, carry a value the authentication story
         # forbids (event.type, event.operation, event.outcome, auth.service,
         # source.ipv4, target.ipv4, network.ip_protocol, and the bare
         # possibly-not-UPN-shaped identifier assigned to source.user.upn).
+        # identity_type and user_type carry valid enum members here, so they
+        # are not flagged.
         source = (FIXTURES / "warn042_auth_bad_values.xql").read_text(
             encoding="utf-8"
         )
@@ -286,6 +295,8 @@ filter _raw_log != null
     xdm.event.outcome = outcome_col,
     xdm.auth.service = svc_col,
     xdm.source.user.upn = upn_col,
+    xdm.source.user.identity_type = identity_col,
+    xdm.source.user.user_type = user_type_col,
     xdm.source.ipv4 = src_ip,
     xdm.source.port = to_integer(to_number(sport_col)),
     xdm.target.ipv4 = dst_ip,
@@ -300,6 +311,57 @@ filter _raw_log != null
         # for hard-coded values, even though they are not temps.
         vios = [v for v in lint(self._DYNAMIC_AUTH) if v["rule_id"] == "WARN-042"]
         self.assertEqual(vios, [])
+
+    def _account_class_rule(self, field: str, rhs: str) -> str:
+        # A minimal auth-marked rule that maps <field> = <rhs>, used to probe
+        # the source.user account-class value-conformance branches.
+        return (
+            "[MODEL: dataset=acme_idp_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            "    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),\n"
+            "    xdm.source.user.upn = user_col,\n"
+            f"    {field} = {rhs}\n"
+            ";\n"
+        )
+
+    def test_identity_type_raw_literal_flagged(self):
+        # A raw string on identity_type (not the XDM enum) is a value error.
+        vios = [
+            v for v in lint(self._account_class_rule(
+                "xdm.source.user.identity_type", '"user"'))
+            if v["rule_id"] == "WARN-042"
+            and "identity_type is assigned a raw literal" in v["message"]
+        ]
+        self.assertEqual(len(vios), 1, vios)
+        self.assertEqual(vios[0]["severity"], "warning")
+
+    def test_user_type_raw_literal_flagged(self):
+        # A raw string on user_type (not the XDM enum) is a value error.
+        vios = [
+            v for v in lint(self._account_class_rule(
+                "xdm.source.user.user_type", '"regular"'))
+            if v["rule_id"] == "WARN-042"
+            and "user_type is assigned a raw literal" in v["message"]
+        ]
+        self.assertEqual(len(vios), 1, vios)
+        self.assertEqual(vios[0]["severity"], "warning")
+
+    def test_account_class_enum_members_not_flagged(self):
+        # The correct XDM_CONST enum members (including a derived if-chain)
+        # must never trip value conformance.
+        for field, rhs in (
+            ("xdm.source.user.identity_type", "XDM_CONST.IDENTITY_TYPE_USER"),
+            ("xdm.source.user.user_type", "XDM_CONST.USER_TYPE_REGULAR"),
+            ("xdm.source.user.user_type",
+             'if(user_col contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT, '
+             "XDM_CONST.USER_TYPE_REGULAR)"),
+        ):
+            vios = [
+                v for v in lint(self._account_class_rule(field, rhs))
+                if v["rule_id"] == "WARN-042" and "raw literal" in v["message"]
+            ]
+            self.assertEqual(vios, [], (field, rhs, vios))
 
     _SIGNAL_ONLY_AUTH = """[MODEL: dataset=acme_idp_raw]
 filter _raw_log != null

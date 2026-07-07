@@ -257,6 +257,15 @@ filter
     xdm.source.user.upn = if(
         _user contains "@", _user,
         _user != null, concat(_user, "@localhost")),
+    xdm.source.user.identity_type = if(
+        _user != null, XDM_CONST.IDENTITY_TYPE_USER,
+        XDM_CONST.IDENTITY_TYPE_UNKNOWN),
+    xdm.source.user.user_type = if(
+        _user = null, XDM_CONST.USER_TYPE_REGULAR,
+        _user contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_user) ~= "^svc[-_]|service|gserviceaccount",
+            XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_IP,
     xdm.network.protocol_layers = arraycreate("IP"),
     xdm.network.http.http_header.header = "",

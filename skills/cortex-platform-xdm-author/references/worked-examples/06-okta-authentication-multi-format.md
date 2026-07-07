@@ -92,6 +92,15 @@ filter
         _result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = "IDP",
     xdm.source.user.upn = _upn,
+    xdm.source.user.identity_type = if(
+        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        XDM_CONST.IDENTITY_TYPE_UNKNOWN),
+    xdm.source.user.user_type = if(
+        _upn = null, XDM_CONST.USER_TYPE_REGULAR,
+        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_upn) ~= "^svc[-_]|service|gserviceaccount",
+            XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src_ip,
     xdm.source.port = to_integer(0),
     xdm.target.ipv4 = "",
@@ -162,6 +171,15 @@ alter
         _result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = "IDP",
     xdm.source.user.upn = _upn,
+    xdm.source.user.identity_type = if(
+        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        XDM_CONST.IDENTITY_TYPE_UNKNOWN),
+    xdm.source.user.user_type = if(
+        _upn = null, XDM_CONST.USER_TYPE_REGULAR,
+        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(_upn) ~= "^svc[-_]|service|gserviceaccount",
+            XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src_ip,
     xdm.source.port = to_integer(0),
     xdm.target.ipv4 = "",
@@ -182,7 +200,7 @@ alter
 ## Key decisions called out
 
 - Extraction differs, assignment does not. The only delta between the two rules is Stage 1: the syslog rule first runs `regextract(_raw_log, "(\{.*\})\s*$")` to recover the JSON body, then every downstream call matches the JSON rule. This is the whole point of a normalised schema -- once the payload is parsed, the wire format is irrelevant.
-- All 12 mandatory fields are mapped in both rules, so the authentication story is created from either feed. WARN-042 stays silent on both because nothing mandatory is missing.
+- All 14 mandatory fields are mapped in both rules, so the authentication story is created from either feed. WARN-042 stays silent on both because nothing mandatory is missing. This includes the two `xdm.source.user` account-class fields: `identity_type` (`IDENTITY_TYPE_USER` for a real principal) and `user_type` (defaulting to `USER_TYPE_REGULAR`, with the `$` / `svc_` / `service` conventions catching machine and service accounts).
 - Placeholders are real, not omissions. Okta logs no source port and no target IP / port, so `xdm.source.port` and `xdm.target.port` take `to_integer(0)` and `xdm.target.ipv4` takes the empty string `""`. Per [authentication-mapping.md](../authentication-mapping.md), a mandatory field must be present even when the source has no value -- dropping it would drop the event from the story.
 - `xdm.source.user.upn`, not `username`. The mandatory correlation key is the UPN (`actor.alternateId`). The human-readable `actor.displayName` is mapped to the optional `xdm.source.user.username`; the two are never substituted for each other.
 - `xdm.event.type` contains `authentication`. The story keys on this substring, not on a `"AUTH"` category label. The classifier guards on `_event != null` so a malformed row resolves to the empty string rather than a false-positive auth event.

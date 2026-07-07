@@ -1850,6 +1850,8 @@ _AUTH_MANDATORY = [
     "xdm.event.outcome",
     "xdm.auth.service",
     "xdm.source.user.upn",
+    "xdm.source.user.identity_type",
+    "xdm.source.user.user_type",
 ]
 
 _AUTH_FIELD_HINT = {
@@ -1873,6 +1875,14 @@ _AUTH_FIELD_HINT = {
     "xdm.auth.service": 'name the role in the flow: "SP" or "IDP"',
     "xdm.source.user.upn": "the authenticated identity in UPN format "
     "(the authentication-story correlation key)",
+    "xdm.source.user.identity_type": "derive the XDM_CONST.IDENTITY_TYPE_* "
+    "member (IDENTITY_TYPE_USER for a human principal -- the common case; "
+    "MACHINE / BUILTIN / VIRTUAL per the principal); pad "
+    "XDM_CONST.IDENTITY_TYPE_UNKNOWN",
+    "xdm.source.user.user_type": "always derive the XDM_CONST.USER_TYPE_* "
+    "member: USER_TYPE_MACHINE_ACCOUNT for a $-suffixed account, "
+    "USER_TYPE_SERVICE_ACCOUNT for a svc_/service/gserviceaccount name, "
+    "else USER_TYPE_REGULAR (the default)",
 }
 
 _AUTH_OPERATION_RE = re.compile(r"OPERATION_TYPE_AUTH_\w+")
@@ -2023,6 +2033,26 @@ def _auth_value_issues(path: str, rhs: str) -> List[tuple]:
                 "of the XDM enum.",
                 "Assign XDM_CONST.IP_PROTOCOL_* "
                 "(IP_PROTOCOL_TCP for interactive auth).",
+            ))
+    elif path == "xdm.source.user.identity_type":
+        if "IDENTITY_TYPE_" not in rhs and _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.source.user.identity_type is assigned a raw literal "
+                "instead of the XDM enum.",
+                "Assign XDM_CONST.IDENTITY_TYPE_* "
+                "(IDENTITY_TYPE_USER for a human principal; "
+                "IDENTITY_TYPE_UNKNOWN as the fall-back).",
+            ))
+    elif path == "xdm.source.user.user_type":
+        if "USER_TYPE_" not in rhs and _rhs_is_static_literal(rhs):
+            issues.append((
+                "This rule models an authentication event, but "
+                "xdm.source.user.user_type is assigned a raw literal "
+                "instead of the XDM enum.",
+                "Assign XDM_CONST.USER_TYPE_* "
+                "(USER_TYPE_REGULAR as the default; MACHINE_ACCOUNT / "
+                "SERVICE_ACCOUNT per the principal).",
             ))
     elif path == "xdm.event.type":
         if lits and not _rhs_has_dynamic(rhs) and not any(

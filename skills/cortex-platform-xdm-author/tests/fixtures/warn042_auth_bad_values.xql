@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Fixture: an authentication event (auto-detected via the
-// EVENT_TAG_AUTHENTICATION tag) that maps all 12 mandatory fields but
+// EVENT_TAG_AUTHENTICATION tag) that maps all 14 mandatory fields but
 // assigns several of them values the authentication story forbids --
 // the wrong const, a static source address, and a list where a string
 // is required. lint_rule.py should raise WARN-042 (value conformance)
@@ -28,6 +28,8 @@ filter
     xdm.event.outcome = XDM_CONST.OUTCOME_UNKNOWN,
     xdm.auth.service = "LOCAL",
     xdm.source.user.upn = _user,
+    xdm.source.user.identity_type = XDM_CONST.IDENTITY_TYPE_USER,
+    xdm.source.user.user_type = XDM_CONST.USER_TYPE_REGULAR,
     xdm.source.ipv4 = "203.0.113.9",
     xdm.source.port = to_integer(0),
     xdm.target.ipv4 = arraycreate("10.0.0.1"),

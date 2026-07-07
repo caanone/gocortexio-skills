@@ -734,6 +734,8 @@ _AUTH_MANDATORY = [
     "xdm.event.outcome",
     "xdm.auth.service",
     "xdm.source.user.upn",
+    "xdm.source.user.identity_type",
+    "xdm.source.user.user_type",
 ]
 
 # Field-name signal. The (?<![a-z]) / (?![a-z]) boundaries keep "auth"
