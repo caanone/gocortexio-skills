@@ -3,7 +3,7 @@
   "generated": "2026-05-03T10:48:07.685Z",
   "source_corpus": "internal corpus of GoCortex modelling rules",
   "rule_count": 464,
-  "anchor_count": 375,
+  "anchor_count": 376,
   "notes": "Synonyms are normalised: lowercased, dots/hyphens/spaces converted to underscores, leading underscores and a single 'tmp_' prefix stripped. Frequency = number of distinct rule blocks that map this xdm path. exampleVendors lists up to 12 vendors observed using this path.",
   "schema": {
     "anchors": "Object keyed by canonical xdm.* path. Each value has { frequency: int, synonyms: Array<{synonym: string, count: int}>, exampleVendors: string[] }. The synonyms array is sorted by descending count then alphabetic; the original task brief described a bare string array, but this richer shape is kept because consumers (linter, IDE quick-fix, training-data ranker) all need the per-synonym frequency. To recover the brief's shape, map `synonyms` to `synonyms.map(s => s.synonym)`."
@@ -1281,7 +1281,7 @@
       ]
     },
     "xdm.alert.original_threat_name": {
-      "frequency": 33,
+      "frequency": 34,
       "synonyms": [
         {
           "synonym": "threatname",
@@ -1430,6 +1430,10 @@
         {
           "synonym": "unifiipssignature",
           "count": 1
+        },
+        {
+          "synonym": "virus_malware_name",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -1469,7 +1473,8 @@
         "threats",
         "threatsanddetectiontech",
         "threatsinfomap",
-        "unifiipssignature"
+        "unifiipssignature",
+        "virus_malware_name"
       ],
       "exampleVendors": [
         "armis",
@@ -1483,7 +1488,8 @@
         "fireeye",
         "forcepoint",
         "fortinet",
-        "incapsula"
+        "incapsula",
+        "infoblox"
       ]
     },
     "xdm.alert.risks": {
@@ -1587,7 +1593,7 @@
       ]
     },
     "xdm.alert.severity": {
-      "frequency": 100,
+      "frequency": 104,
       "synonyms": [
         {
           "synonym": "severity",
@@ -1808,6 +1814,22 @@
         {
           "synonym": "wafattackscore",
           "count": 1
+        },
+        {
+          "synonym": "vendor_severity",
+          "count": 1
+        },
+        {
+          "synonym": "deviceseverity",
+          "count": 1
+        },
+        {
+          "synonym": "fields_severity",
+          "count": 1
+        },
+        {
+          "synonym": "cisco_severity",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -1865,7 +1887,11 @@
         "threat_level",
         "threat_severity",
         "unifirisk",
-        "wafattackscore"
+        "wafattackscore",
+        "vendor_severity",
+        "deviceseverity",
+        "fields_severity",
+        "cisco_severity"
       ],
       "exampleVendors": [
         "akamai",
@@ -1879,7 +1905,10 @@
         "cloudflare",
         "code42",
         "cohesity",
-        "commvault"
+        "commvault",
+        "a10",
+        "juniper",
+        "vmware"
       ]
     },
     "xdm.alert.source_url": {
@@ -4091,7 +4120,7 @@
       ]
     },
     "xdm.event.description": {
-      "frequency": 143,
+      "frequency": 156,
       "synonyms": [
         {
           "synonym": "description",
@@ -4552,6 +4581,46 @@
         {
           "synonym": "webhook",
           "count": 1
+        },
+        {
+          "synonym": "inner_msg",
+          "count": 1
+        },
+        {
+          "synonym": "ctdmessage",
+          "count": 1
+        },
+        {
+          "synonym": "desc",
+          "count": 4
+        },
+        {
+          "synonym": "descrip",
+          "count": 1
+        },
+        {
+          "synonym": "event_description",
+          "count": 1
+        },
+        {
+          "synonym": "evnt_description",
+          "count": 1
+        },
+        {
+          "synonym": "cisco_message",
+          "count": 1
+        },
+        {
+          "synonym": "extended_description",
+          "count": 1
+        },
+        {
+          "synonym": "log_msg",
+          "count": 1
+        },
+        {
+          "synonym": "msg1",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -4669,7 +4738,17 @@
         "textpayload",
         "updatetitle",
         "url",
-        "webhook"
+        "webhook",
+        "inner_msg",
+        "ctdmessage",
+        "desc",
+        "descrip",
+        "event_description",
+        "evnt_description",
+        "cisco_message",
+        "extended_description",
+        "log_msg",
+        "msg1"
       ],
       "exampleVendors": [
         "akamai",
@@ -4683,7 +4762,15 @@
         "cisco",
         "citrix",
         "claroty",
-        "cloudflare"
+        "cloudflare",
+        "arista",
+        "a10",
+        "f5",
+        "huawei",
+        "vmware",
+        "nix",
+        "sophos",
+        "dell"
       ]
     },
     "xdm.event.duration": {
@@ -6008,7 +6095,7 @@
       ]
     },
     "xdm.event.original_event_type": {
-      "frequency": 81,
+      "frequency": 90,
       "synonyms": [
         {
           "synonym": "category",
@@ -6229,6 +6316,38 @@
         {
           "synonym": "wineventtype",
           "count": 1
+        },
+        {
+          "synonym": "device_event_class_id",
+          "count": 1
+        },
+        {
+          "synonym": "event_name",
+          "count": 1
+        },
+        {
+          "synonym": "evt_type",
+          "count": 1
+        },
+        {
+          "synonym": "product_event_type",
+          "count": 2
+        },
+        {
+          "synonym": "modulename",
+          "count": 1
+        },
+        {
+          "synonym": "sub_category",
+          "count": 1
+        },
+        {
+          "synonym": "cisco_tag",
+          "count": 1
+        },
+        {
+          "synonym": "log_component",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -6286,7 +6405,15 @@
         "subtype",
         "title",
         "token",
-        "wineventtype"
+        "wineventtype",
+        "device_event_class_id",
+        "event_name",
+        "evt_type",
+        "product_event_type",
+        "modulename",
+        "sub_category",
+        "cisco_tag",
+        "log_component"
       ],
       "exampleVendors": [
         "amazon",
@@ -6300,7 +6427,11 @@
         "claroty",
         "code42",
         "commvault",
-        "cybelangel"
+        "cybelangel",
+        "infoblox",
+        "arista",
+        "vmware",
+        "sophos"
       ]
     },
     "xdm.event.outcome": {
@@ -7762,7 +7893,7 @@
       ]
     },
     "xdm.intermediate.host.hostname": {
-      "frequency": 18,
+      "frequency": 27,
       "synonyms": [
         {
           "synonym": "auth_device",
@@ -7843,6 +7974,42 @@
         {
           "synonym": "target_proxy_name",
           "count": 1
+        },
+        {
+          "synonym": "sys_log_host",
+          "count": 1
+        },
+        {
+          "synonym": "virtualserver",
+          "count": 1
+        },
+        {
+          "synonym": "agent_hostname",
+          "count": 1
+        },
+        {
+          "synonym": "dvc",
+          "count": 1
+        },
+        {
+          "synonym": "hostname",
+          "count": 1
+        },
+        {
+          "synonym": "raw_hostname",
+          "count": 1
+        },
+        {
+          "synonym": "kv_msg1_relay",
+          "count": 1
+        },
+        {
+          "synonym": "device_model",
+          "count": 1
+        },
+        {
+          "synonym": "intermediary_host",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -7865,7 +8032,16 @@
         "network",
         "originatingserver",
         "parsed_fields_description",
-        "target_proxy_name"
+        "target_proxy_name",
+        "sys_log_host",
+        "virtualserver",
+        "agent_hostname",
+        "dvc",
+        "hostname",
+        "raw_hostname",
+        "kv_msg1_relay",
+        "device_model",
+        "intermediary_host"
       ],
       "exampleVendors": [
         "application",
@@ -7879,7 +8055,12 @@
         "lookout",
         "manageengine",
         "msft",
-        "okta"
+        "okta",
+        "aix",
+        "a10",
+        "vmware",
+        "f5",
+        "sophos"
       ]
     },
     "xdm.intermediate.host.ipv4_addresses": {
@@ -8117,7 +8298,7 @@
       ]
     },
     "xdm.intermediate.ipv4": {
-      "frequency": 22,
+      "frequency": 27,
       "synonyms": [
         {
           "synonym": "dvc",
@@ -8222,6 +8403,22 @@
         {
           "synonym": "viewerip",
           "count": 1
+        },
+        {
+          "synonym": "intermediary_hostip",
+          "count": 1
+        },
+        {
+          "synonym": "dvc_ip",
+          "count": 1
+        },
+        {
+          "synonym": "i_ip",
+          "count": 1
+        },
+        {
+          "synonym": "intermediary_ip",
+          "count": 2
         }
       ],
       "synonyms_simple": [
@@ -8250,7 +8447,11 @@
         "serverrouted",
         "src",
         "unifideviceip",
-        "viewerip"
+        "viewerip",
+        "intermediary_hostip",
+        "dvc_ip",
+        "i_ip",
+        "intermediary_ip"
       ],
       "exampleVendors": [
         "application",
@@ -8264,7 +8465,9 @@
         "infoblox",
         "ironscales",
         "lookout",
-        "manage"
+        "manage",
+        "aix",
+        "extreme"
       ]
     },
     "xdm.intermediate.ipv6": {
@@ -8471,7 +8674,7 @@
       ]
     },
     "xdm.intermediate.port": {
-      "frequency": 6,
+      "frequency": 9,
       "synonyms": [
         {
           "synonym": "deliveredto",
@@ -8504,6 +8707,18 @@
         {
           "synonym": "serverrouted",
           "count": 1
+        },
+        {
+          "synonym": "i_port",
+          "count": 1
+        },
+        {
+          "synonym": "comm_tuple_server_port",
+          "count": 1
+        },
+        {
+          "synonym": "server_port",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -8514,7 +8729,10 @@
         "global_port",
         "proxy_port",
         "serverport",
-        "serverrouted"
+        "serverrouted",
+        "i_port",
+        "comm_tuple_server_port",
+        "server_port"
       ],
       "exampleVendors": [
         "application",
@@ -8522,7 +8740,9 @@
         "infoblox",
         "lookout",
         "msft",
-        "trend"
+        "trend",
+        "f5",
+        "claroty"
       ]
     },
     "xdm.intermediate.process.command_line": {
@@ -9204,7 +9424,7 @@
       ]
     },
     "xdm.network.dns.dns_question.name": {
-      "frequency": 12,
+      "frequency": 13,
       "synonyms": [
         {
           "synonym": "queryname",
@@ -9253,6 +9473,10 @@
         {
           "synonym": "questionname",
           "count": 1
+        },
+        {
+          "synonym": "dns_question",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -9267,7 +9491,8 @@
         "log_fields",
         "qname",
         "query",
-        "questionname"
+        "questionname",
+        "dns_question"
       ],
       "exampleVendors": [
         "aws",
@@ -9829,7 +10054,7 @@
       ]
     },
     "xdm.network.http.method": {
-      "frequency": 34,
+      "frequency": 35,
       "synonyms": [
         {
           "synonym": "requestmethod",
@@ -9926,6 +10151,10 @@
         {
           "synonym": "title",
           "count": 1
+        },
+        {
+          "synonym": "method_req",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -9952,7 +10181,8 @@
         "request",
         "requestattributes",
         "requestmetadata",
-        "title"
+        "title",
+        "method_req"
       ],
       "exampleVendors": [
         "akamai",
@@ -10974,7 +11204,7 @@
       ]
     },
     "xdm.network.ip_protocol": {
-      "frequency": 45,
+      "frequency": 50,
       "synonyms": [
         {
           "synonym": "proto",
@@ -11063,6 +11293,26 @@
         {
           "synonym": "transportprotocol",
           "count": 1
+        },
+        {
+          "synonym": "family",
+          "count": 1
+        },
+        {
+          "synonym": "icmptype",
+          "count": 1
+        },
+        {
+          "synonym": "ip_protocol_out",
+          "count": 1
+        },
+        {
+          "synonym": "evnt_extra_info_ip_protocol",
+          "count": 1
+        },
+        {
+          "synonym": "labels_net_transport",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -11087,7 +11337,12 @@
         "nfm",
         "properties",
         "title",
-        "transportprotocol"
+        "transportprotocol",
+        "family",
+        "icmptype",
+        "ip_protocol_out",
+        "evnt_extra_info_ip_protocol",
+        "labels_net_transport"
       ],
       "exampleVendors": [
         "akamai",
@@ -11101,7 +11356,11 @@
         "f5",
         "fireeye",
         "forcepoint",
-        "fortinet"
+        "fortinet",
+        "nix",
+        "infoblox",
+        "claroty",
+        "vmware"
       ]
     },
     "xdm.network.ldap.attributes": {
@@ -12211,7 +12470,7 @@
       ]
     },
     "xdm.observer.action": {
-      "frequency": 73,
+      "frequency": 74,
       "synonyms": [
         {
           "synonym": "act",
@@ -12436,6 +12695,10 @@
         {
           "synonym": "threatprotectionaction",
           "count": 1
+        },
+        {
+          "synonym": "accesscontrolruleaction",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -12494,7 +12757,8 @@
         "stat",
         "state",
         "themis_verdict",
-        "threatprotectionaction"
+        "threatprotectionaction",
+        "accesscontrolruleaction"
       ],
       "exampleVendors": [
         "akamai",
@@ -12508,7 +12772,8 @@
         "cyberark",
         "darktrace",
         "duo",
-        "fireeye"
+        "fireeye",
+        "nix"
       ]
     },
     "xdm.observer.content_version": {
@@ -12885,7 +13150,7 @@
       ]
     },
     "xdm.observer.product": {
-      "frequency": 7,
+      "frequency": 9,
       "synonyms": [
         {
           "synonym": "cefdeviceproduct",
@@ -12910,6 +13175,10 @@
         {
           "synonym": "report_link",
           "count": 1
+        },
+        {
+          "synonym": "device_product",
+          "count": 2
         }
       ],
       "synonyms_simple": [
@@ -12918,7 +13187,8 @@
         "app_name",
         "parentdisplayname",
         "properties",
-        "report_link"
+        "report_link",
+        "device_product"
       ],
       "exampleVendors": [
         "aws",
@@ -12927,7 +13197,9 @@
         "manageengine",
         "microsoft",
         "riverbed",
-        "vmware"
+        "vmware",
+        "a10",
+        "infoblox"
       ]
     },
     "xdm.observer.type": {
@@ -13423,7 +13695,7 @@
       ]
     },
     "xdm.observer.vendor": {
-      "frequency": 8,
+      "frequency": 11,
       "synonyms": [
         {
           "synonym": "vendor",
@@ -13444,6 +13716,14 @@
         {
           "synonym": "vendorname",
           "count": 1
+        },
+        {
+          "synonym": "device_vendor",
+          "count": 2
+        },
+        {
+          "synonym": "devicevendor",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -13451,7 +13731,9 @@
         "cefdevicevendor",
         "properties",
         "software",
-        "vendorname"
+        "vendorname",
+        "device_vendor",
+        "devicevendor"
       ],
       "exampleVendors": [
         "alibaba",
@@ -13460,11 +13742,14 @@
         "google",
         "manageengine",
         "microsoft",
-        "riverbed"
+        "riverbed",
+        "a10",
+        "infoblox",
+        "juniper"
       ]
     },
     "xdm.observer.version": {
-      "frequency": 40,
+      "frequency": 43,
       "synonyms": [
         {
           "synonym": "cefdeviceversion",
@@ -13553,6 +13838,14 @@
         {
           "synonym": "unifideviceversion",
           "count": 1
+        },
+        {
+          "synonym": "device_version",
+          "count": 2
+        },
+        {
+          "synonym": "deviceversion",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -13577,7 +13870,9 @@
         "signaturesversion",
         "sw_version",
         "swversion",
-        "unifideviceversion"
+        "unifideviceversion",
+        "device_version",
+        "deviceversion"
       ],
       "exampleVendors": [
         "akamai",
@@ -13591,7 +13886,10 @@
         "forescout",
         "fortinet",
         "hashicorp",
-        "illusive"
+        "illusive",
+        "a10",
+        "infoblox",
+        "juniper"
       ]
     },
     "xdm.session_context_id": {
@@ -14139,7 +14437,7 @@
       ]
     },
     "xdm.source.application.name": {
-      "frequency": 54,
+      "frequency": 56,
       "synonyms": [
         {
           "synonym": "application",
@@ -14404,6 +14702,14 @@
         {
           "synonym": "x_mailer",
           "count": 1
+        },
+        {
+          "synonym": "sourceservicename",
+          "count": 1
+        },
+        {
+          "synonym": "app_type",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -14472,7 +14778,9 @@
         "title",
         "type",
         "value",
-        "x_mailer"
+        "x_mailer",
+        "sourceservicename",
+        "app_type"
       ],
       "exampleVendors": [
         "absolute",
@@ -14486,7 +14794,9 @@
         "duo",
         "forcepoint",
         "fortinet",
-        "gcp"
+        "gcp",
+        "infoblox",
+        "vmware"
       ]
     },
     "xdm.source.application.publisher": {
@@ -15690,7 +16000,7 @@
       ]
     },
     "xdm.source.host.hostname": {
-      "frequency": 103,
+      "frequency": 110,
       "synonyms": [
         {
           "synonym": "hostname",
@@ -16023,6 +16333,34 @@
         {
           "synonym": "vminstancename",
           "count": 1
+        },
+        {
+          "synonym": "prin_host",
+          "count": 1
+        },
+        {
+          "synonym": "ctdsite",
+          "count": 1
+        },
+        {
+          "synonym": "fields_host",
+          "count": 1
+        },
+        {
+          "synonym": "principal_hostname",
+          "count": 1
+        },
+        {
+          "synonym": "eventdata_identity",
+          "count": 1
+        },
+        {
+          "synonym": "networkdevicename",
+          "count": 1
+        },
+        {
+          "synonym": "rcsysloghostaddress",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -16108,7 +16446,14 @@
         "title",
         "userhost",
         "vm_name",
-        "vminstancename"
+        "vminstancename",
+        "prin_host",
+        "ctdsite",
+        "fields_host",
+        "principal_hostname",
+        "eventdata_identity",
+        "networkdevicename",
+        "rcsysloghostaddress"
       ],
       "exampleVendors": [
         "absolute",
@@ -16122,7 +16467,10 @@
         "check",
         "cisco",
         "claroty",
-        "code42"
+        "code42",
+        "a10",
+        "vmware",
+        "extreme"
       ]
     },
     "xdm.source.host.ipv4_addresses": {
@@ -17060,7 +17408,7 @@
       ]
     },
     "xdm.source.host.mac_addresses": {
-      "frequency": 21,
+      "frequency": 28,
       "synonyms": [
         {
           "synonym": "macaddress",
@@ -17173,6 +17521,26 @@
         {
           "synonym": "workload_information",
           "count": 1
+        },
+        {
+          "synonym": "mac",
+          "count": 2
+        },
+        {
+          "synonym": "prin_mac",
+          "count": 2
+        },
+        {
+          "synonym": "clientmac",
+          "count": 1
+        },
+        {
+          "synonym": "eventdata_client_mac",
+          "count": 1
+        },
+        {
+          "synonym": "slppsrcmacaddress",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -17203,7 +17571,12 @@
         "src_asset_mac",
         "srcmac",
         "unificlientmac",
-        "workload_information"
+        "workload_information",
+        "mac",
+        "prin_mac",
+        "clientmac",
+        "eventdata_client_mac",
+        "slppsrcmacaddress"
       ],
       "exampleVendors": [
         "armis",
@@ -17217,7 +17590,9 @@
         "fortinet",
         "infoblox",
         "mcafee",
-        "microsoft"
+        "microsoft",
+        "a10",
+        "extreme"
       ]
     },
     "xdm.source.host.manufacturer": {
@@ -17717,7 +18092,7 @@
       ]
     },
     "xdm.source.ipv4": {
-      "frequency": 192,
+      "frequency": 203,
       "synonyms": [
         {
           "synonym": "src",
@@ -18254,6 +18629,50 @@
         {
           "synonym": "orig_h",
           "count": 1
+        },
+        {
+          "synonym": "addr",
+          "count": 1
+        },
+        {
+          "synonym": "laddr",
+          "count": 1
+        },
+        {
+          "synonym": "prin_ip",
+          "count": 1
+        },
+        {
+          "synonym": "principal_ip",
+          "count": 1
+        },
+        {
+          "synonym": "source_address",
+          "count": 1
+        },
+        {
+          "synonym": "labels_net_host_ip",
+          "count": 1
+        },
+        {
+          "synonym": "management_ip",
+          "count": 1
+        },
+        {
+          "synonym": "src_ip1",
+          "count": 1
+        },
+        {
+          "synonym": "device_ip_address",
+          "count": 1
+        },
+        {
+          "synonym": "eventdata_client_ip",
+          "count": 1
+        },
+        {
+          "synonym": "generic_ip",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -18390,7 +18809,18 @@
         "unifi_client_ipv4",
         "useraddress",
         "cltip",
-        "orig_h"
+        "orig_h",
+        "addr",
+        "laddr",
+        "prin_ip",
+        "principal_ip",
+        "source_address",
+        "labels_net_host_ip",
+        "management_ip",
+        "src_ip1",
+        "device_ip_address",
+        "eventdata_client_ip",
+        "generic_ip"
       ],
       "exampleVendors": [
         "1password",
@@ -18404,7 +18834,13 @@
         "armis",
         "aruba",
         "atlassian",
-        "aws"
+        "aws",
+        "nix",
+        "infoblox",
+        "juniper",
+        "vmware",
+        "claroty",
+        "cisco"
       ]
     },
     "xdm.source.ipv6": {
@@ -19135,7 +19571,7 @@
       ]
     },
     "xdm.source.location.country": {
-      "frequency": 27,
+      "frequency": 30,
       "synonyms": [
         {
           "synonym": "country",
@@ -19240,6 +19676,18 @@
         {
           "synonym": "srcip_country",
           "count": 1
+        },
+        {
+          "synonym": "infobloxb1region",
+          "count": 1
+        },
+        {
+          "synonym": "c",
+          "count": 1
+        },
+        {
+          "synonym": "fields_region_id",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -19268,7 +19716,10 @@
         "name",
         "remote",
         "src_country",
-        "srcip_country"
+        "srcip_country",
+        "infobloxb1region",
+        "c",
+        "fields_region_id"
       ],
       "exampleVendors": [
         "1password",
@@ -19282,7 +19733,10 @@
         "front",
         "github",
         "incapsula",
-        "microsoft"
+        "microsoft",
+        "infoblox",
+        "citrix",
+        "vmware"
       ]
     },
     "xdm.source.location.latitude": {
@@ -19572,7 +20026,7 @@
       ]
     },
     "xdm.source.port": {
-      "frequency": 57,
+      "frequency": 61,
       "synonyms": [
         {
           "synonym": "spt",
@@ -19745,6 +20199,22 @@
         {
           "synonym": "orig_p",
           "count": 1
+        },
+        {
+          "synonym": "lport",
+          "count": 1
+        },
+        {
+          "synonym": "prin_port",
+          "count": 1
+        },
+        {
+          "synonym": "client_port",
+          "count": 1
+        },
+        {
+          "synonym": "labels_net_host_port",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -19790,7 +20260,11 @@
         "upstreamsourceport",
         "userip",
         "s_port",
-        "orig_p"
+        "orig_p",
+        "lport",
+        "prin_port",
+        "client_port",
+        "labels_net_host_port"
       ],
       "exampleVendors": [
         "application",
@@ -19804,11 +20278,15 @@
         "f5",
         "fireeye",
         "forcepoint",
-        "fortinet"
+        "fortinet",
+        "nix",
+        "a10",
+        "citrix",
+        "vmware"
       ]
     },
     "xdm.source.process.command_line": {
-      "frequency": 27,
+      "frequency": 29,
       "synonyms": [
         {
           "synonym": "command",
@@ -19953,6 +20431,14 @@
         {
           "synonym": "trendmicrodscommandline",
           "count": 1
+        },
+        {
+          "synonym": "sproc",
+          "count": 1
+        },
+        {
+          "synonym": "cmd",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -19991,7 +20477,9 @@
         "sourceprocessinfo",
         "suspicious_command",
         "suspicious_command_line",
-        "trendmicrodscommandline"
+        "trendmicrodscommandline",
+        "sproc",
+        "cmd"
       ],
       "exampleVendors": [
         "beyondtrust",
@@ -20005,7 +20493,9 @@
         "msft",
         "nvidia",
         "sentinelone",
-        "symantec"
+        "symantec",
+        "infoblox",
+        "huawei"
       ]
     },
     "xdm.source.process.container_id": {
@@ -20456,7 +20946,7 @@
       ]
     },
     "xdm.source.process.executable.path": {
-      "frequency": 21,
+      "frequency": 23,
       "synonyms": [
         {
           "synonym": "filepath",
@@ -20565,6 +21055,14 @@
         {
           "synonym": "threatinfo",
           "count": 1
+        },
+        {
+          "synonym": "cgroup",
+          "count": 1
+        },
+        {
+          "synonym": "log_file_path",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -20594,7 +21092,9 @@
         "sourceprocessinfo",
         "sproc",
         "src",
-        "threatinfo"
+        "threatinfo",
+        "cgroup",
+        "log_file_path"
       ],
       "exampleVendors": [
         "akamai",
@@ -20608,7 +21108,9 @@
         "netskope",
         "nvidia",
         "sentinelone",
-        "symantec"
+        "symantec",
+        "nix",
+        "vmware"
       ]
     },
     "xdm.source.process.executable.sha256": {
@@ -21243,7 +21745,7 @@
       ]
     },
     "xdm.source.process.pid": {
-      "frequency": 27,
+      "frequency": 30,
       "synonyms": [
         {
           "synonym": "pid",
@@ -21320,6 +21822,14 @@
         {
           "synonym": "systemdataprocessid",
           "count": 1
+        },
+        {
+          "synonym": "spid",
+          "count": 2
+        },
+        {
+          "synonym": "fields_procid",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -21341,7 +21851,9 @@
         "sourceprocessinfo",
         "src",
         "suspicious_process_id",
-        "systemdataprocessid"
+        "systemdataprocessid",
+        "spid",
+        "fields_procid"
       ],
       "exampleVendors": [
         "arista",
@@ -21355,7 +21867,10 @@
         "nasuni",
         "oracle",
         "riverbed",
-        "sentinelone"
+        "sentinelone",
+        "infoblox",
+        "nix",
+        "vmware"
       ]
     },
     "xdm.source.process.thread_id": {
@@ -21672,7 +22187,7 @@
       ]
     },
     "xdm.source.user.domain": {
-      "frequency": 31,
+      "frequency": 32,
       "synonyms": [
         {
           "synonym": "domain",
@@ -21841,6 +22356,10 @@
         {
           "synonym": "username",
           "count": 1
+        },
+        {
+          "synonym": "administrative_domain",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -21885,7 +22404,8 @@
         "systemdatauserinfodomain",
         "trigger_user",
         "userid_domain",
-        "username"
+        "username",
+        "administrative_domain"
       ],
       "exampleVendors": [
         "cisco",
@@ -21899,7 +22419,8 @@
         "google",
         "manageengine",
         "microsoft",
-        "msft"
+        "msft",
+        "vmware"
       ]
     },
     "xdm.source.user.employee_id": {
@@ -23278,7 +23799,7 @@
       ]
     },
     "xdm.source.user.username": {
-      "frequency": 180,
+      "frequency": 184,
       "synonyms": [
         {
           "synonym": "user",
@@ -23847,6 +24368,22 @@
         {
           "synonym": "vpn_user",
           "count": 1
+        },
+        {
+          "synonym": "actor_details",
+          "count": 1
+        },
+        {
+          "synonym": "suid",
+          "count": 1
+        },
+        {
+          "synonym": "acct",
+          "count": 1
+        },
+        {
+          "synonym": "adid",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -23991,7 +24528,11 @@
         "userlogin",
         "users",
         "usrname",
-        "vpn_user"
+        "vpn_user",
+        "actor_details",
+        "suid",
+        "acct",
+        "adid"
       ],
       "exampleVendors": [
         "1password",
@@ -24005,11 +24546,14 @@
         "aruba",
         "atlassian",
         "aws",
-        "barracuda"
+        "barracuda",
+        "infoblox",
+        "dell",
+        "cisco"
       ]
     },
     "xdm.source.user_agent": {
-      "frequency": 64,
+      "frequency": 65,
       "synonyms": [
         {
           "synonym": "useragent",
@@ -24158,6 +24702,10 @@
         {
           "synonym": "useragent_s",
           "count": 1
+        },
+        {
+          "synonym": "header_user_agent",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -24197,7 +24745,8 @@
         "requestmetadata",
         "src",
         "syslog_msg",
-        "useragent_s"
+        "useragent_s",
+        "header_user_agent"
       ],
       "exampleVendors": [
         "absolute",
@@ -24512,7 +25061,7 @@
       ]
     },
     "xdm.target.application.name": {
-      "frequency": 29,
+      "frequency": 30,
       "synonyms": [
         {
           "synonym": "applicationname",
@@ -24645,6 +25194,10 @@
         {
           "synonym": "type",
           "count": 1
+        },
+        {
+          "synonym": "vmw_product",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -24680,7 +25233,8 @@
         "s_sitename",
         "service",
         "site",
-        "type"
+        "type",
+        "vmw_product"
       ],
       "exampleVendors": [
         "1password",
@@ -24694,7 +25248,8 @@
         "ibm",
         "imperva",
         "kiteworks",
-        "lookout"
+        "lookout",
+        "vmware"
       ]
     },
     "xdm.target.application.publisher": {
@@ -26004,7 +26559,7 @@
       ]
     },
     "xdm.target.file.path": {
-      "frequency": 39,
+      "frequency": 40,
       "synonyms": [
         {
           "synonym": "path",
@@ -26189,6 +26744,10 @@
         {
           "synonym": "uri",
           "count": 1
+        },
+        {
+          "synonym": "cwd",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -26237,7 +26796,8 @@
         "tgtfilepath",
         "to",
         "trendmicrodsmalwaretarget",
-        "uri"
+        "uri",
+        "cwd"
       ],
       "exampleVendors": [
         "admin",
@@ -26251,7 +26811,8 @@
         "forcepoint",
         "gitguardian",
         "google",
-        "jamf"
+        "jamf",
+        "nix"
       ]
     },
     "xdm.target.file.sha256": {
@@ -26992,7 +27553,7 @@
       ]
     },
     "xdm.target.host.hostname": {
-      "frequency": 74,
+      "frequency": 77,
       "synonyms": [
         {
           "synonym": "dhost",
@@ -27273,6 +27834,18 @@
         {
           "synonym": "zen",
           "count": 1
+        },
+        {
+          "synonym": "fqdn",
+          "count": 1
+        },
+        {
+          "synonym": "target_host",
+          "count": 1
+        },
+        {
+          "synonym": "temp_dhost",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -27345,7 +27918,10 @@
         "url_host",
         "user_machine_name",
         "vm_name",
-        "zen"
+        "zen",
+        "fqdn",
+        "target_host",
+        "temp_dhost"
       ],
       "exampleVendors": [
         "admin",
@@ -27359,7 +27935,8 @@
         "check",
         "cisco",
         "claroty",
-        "code42"
+        "code42",
+        "infoblox"
       ]
     },
     "xdm.target.host.image": {
@@ -27962,7 +28539,7 @@
       ]
     },
     "xdm.target.host.mac_addresses": {
-      "frequency": 15,
+      "frequency": 20,
       "synonyms": [
         {
           "synonym": "dmac",
@@ -28023,6 +28600,26 @@
         {
           "synonym": "wifimacaddress",
           "count": 1
+        },
+        {
+          "synonym": "dst_mac",
+          "count": 1
+        },
+        {
+          "synonym": "tar_mac",
+          "count": 1
+        },
+        {
+          "synonym": "target_mac",
+          "count": 1
+        },
+        {
+          "synonym": "amac",
+          "count": 1
+        },
+        {
+          "synonym": "devicemac",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -28040,7 +28637,12 @@
         "model",
         "resource_data_mac_address",
         "unifidevicemac",
-        "wifimacaddress"
+        "wifimacaddress",
+        "dst_mac",
+        "tar_mac",
+        "target_mac",
+        "amac",
+        "devicemac"
       ],
       "exampleVendors": [
         "aruba",
@@ -28054,7 +28656,11 @@
         "lookout",
         "msft",
         "orca",
-        "portnox"
+        "portnox",
+        "arista",
+        "a10",
+        "infoblox",
+        "juniper"
       ]
     },
     "xdm.target.host.manufacturer": {
@@ -28349,7 +28955,7 @@
       ]
     },
     "xdm.target.ipv4": {
-      "frequency": 91,
+      "frequency": 95,
       "synonyms": [
         {
           "synonym": "dst",
@@ -28702,6 +29308,22 @@
         {
           "synonym": "resp_h",
           "count": 1
+        },
+        {
+          "synonym": "target_ip",
+          "count": 1
+        },
+        {
+          "synonym": "labels_net_peer_ip",
+          "count": 1
+        },
+        {
+          "synonym": "deviceip",
+          "count": 1
+        },
+        {
+          "synonym": "local_ip",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -28792,7 +29414,11 @@
         "upstream_addr",
         "dvc_ip",
         "svrip",
-        "resp_h"
+        "resp_h",
+        "target_ip",
+        "labels_net_peer_ip",
+        "deviceip",
+        "local_ip"
       ],
       "exampleVendors": [
         "akamai",
@@ -28806,11 +29432,13 @@
         "cloudflare",
         "code42",
         "corelight",
-        "cybelangel"
+        "cybelangel",
+        "vmware",
+        "dell"
       ]
     },
     "xdm.target.ipv6": {
-      "frequency": 68,
+      "frequency": 69,
       "synonyms": [
         {
           "synonym": "dst",
@@ -29067,6 +29695,10 @@
         {
           "synonym": "upstream_addr",
           "count": 1
+        },
+        {
+          "synonym": "ipv6",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -29133,7 +29765,8 @@
         "targetaddress",
         "targetnetwork",
         "translatedip",
-        "upstream_addr"
+        "upstream_addr",
+        "ipv6"
       ],
       "exampleVendors": [
         "akamai",
@@ -29147,7 +29780,8 @@
         "cloudflare",
         "code42",
         "corelight",
-        "cybelangel"
+        "cybelangel",
+        "infoblox"
       ]
     },
     "xdm.target.location.city": {
@@ -29588,7 +30222,7 @@
       ]
     },
     "xdm.target.port": {
-      "frequency": 67,
+      "frequency": 73,
       "synonyms": [
         {
           "synonym": "dpt",
@@ -29789,6 +30423,30 @@
         {
           "synonym": "resp_p",
           "count": 1
+        },
+        {
+          "synonym": "tar_port",
+          "count": 1
+        },
+        {
+          "synonym": "target_port",
+          "count": 1
+        },
+        {
+          "synonym": "client_fport",
+          "count": 1
+        },
+        {
+          "synonym": "labels_net_peer_port",
+          "count": 1
+        },
+        {
+          "synonym": "dport",
+          "count": 1
+        },
+        {
+          "synonym": "local_port",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -29841,7 +30499,13 @@
         "totargetport",
         "translatedport",
         "upstream_addr",
-        "resp_p"
+        "resp_p",
+        "tar_port",
+        "target_port",
+        "client_fport",
+        "labels_net_peer_port",
+        "dport",
+        "local_port"
       ],
       "exampleVendors": [
         "akamai",
@@ -29855,11 +30519,16 @@
         "corelight",
         "cybelangel",
         "f5",
-        "fireeye"
+        "fireeye",
+        "a10",
+        "arista",
+        "citrix",
+        "vmware",
+        "dell"
       ]
     },
     "xdm.target.process.command_line": {
-      "frequency": 12,
+      "frequency": 18,
       "synonyms": [
         {
           "synonym": "command",
@@ -29932,6 +30601,30 @@
         {
           "synonym": "tgtproccmdline",
           "count": 1
+        },
+        {
+          "synonym": "cmd",
+          "count": 1
+        },
+        {
+          "synonym": "cmddata",
+          "count": 1
+        },
+        {
+          "synonym": "dproc",
+          "count": 1
+        },
+        {
+          "synonym": "ocomm",
+          "count": 1
+        },
+        {
+          "synonym": "proctitle",
+          "count": 1
+        },
+        {
+          "synonym": "target_package",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -29952,7 +30645,13 @@
         "sql_command",
         "targetcommandline",
         "targetprocessinfo",
-        "tgtproccmdline"
+        "tgtproccmdline",
+        "cmd",
+        "cmddata",
+        "dproc",
+        "ocomm",
+        "proctitle",
+        "target_package"
       ],
       "exampleVendors": [
         "cisco",
@@ -29965,7 +30664,11 @@
         "salesforce",
         "sentinelone",
         "vmware",
-        "withsecure"
+        "withsecure",
+        "nix",
+        "aix",
+        "infoblox",
+        "arista"
       ]
     },
     "xdm.target.process.container_id": {
@@ -30078,7 +30781,7 @@
       ]
     },
     "xdm.target.process.executable.path": {
-      "frequency": 4,
+      "frequency": 5,
       "synonyms": [
         {
           "synonym": "cs15",
@@ -30103,6 +30806,10 @@
         {
           "synonym": "path",
           "count": 1
+        },
+        {
+          "synonym": "file_name",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -30111,13 +30818,15 @@
         "event_values",
         "exe",
         "model",
-        "path"
+        "path",
+        "file_name"
       ],
       "exampleVendors": [
         "akamai",
         "fireeye",
         "orca",
-        "vmware"
+        "vmware",
+        "infoblox"
       ]
     },
     "xdm.target.process.executable.sha256": {
@@ -30328,7 +31037,7 @@
       ]
     },
     "xdm.target.process.pid": {
-      "frequency": 11,
+      "frequency": 13,
       "synonyms": [
         {
           "synonym": "processid",
@@ -30393,6 +31102,14 @@
         {
           "synonym": "uniqueid",
           "count": 1
+        },
+        {
+          "synonym": "dpid",
+          "count": 1
+        },
+        {
+          "synonym": "p_id",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -30411,7 +31128,9 @@
         "targetprocessid",
         "targetprocessinfo",
         "tgtprocpid",
-        "uniqueid"
+        "uniqueid",
+        "dpid",
+        "p_id"
       ],
       "exampleVendors": [
         "fireeye",
@@ -30420,7 +31139,9 @@
         "msft",
         "orca",
         "sentinelone",
-        "vmware"
+        "vmware",
+        "infoblox",
+        "juniper"
       ]
     },
     "xdm.target.registry.data": {
@@ -31790,7 +32511,7 @@
       ]
     },
     "xdm.target.resource.name": {
-      "frequency": 81,
+      "frequency": 84,
       "synonyms": [
         {
           "synonym": "name",
@@ -32491,6 +33212,18 @@
         {
           "synonym": "zone_name",
           "count": 1
+        },
+        {
+          "synonym": "object_name",
+          "count": 1
+        },
+        {
+          "synonym": "adapter",
+          "count": 1
+        },
+        {
+          "synonym": "vmw_cluster",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -32668,7 +33401,10 @@
         "username",
         "variablegroupname",
         "workflowname",
-        "zone_name"
+        "zone_name",
+        "object_name",
+        "adapter",
+        "vmw_cluster"
       ],
       "exampleVendors": [
         "absolute",
@@ -32682,7 +33418,9 @@
         "claroty",
         "cohesity",
         "cyber",
-        "cyberark"
+        "cyberark",
+        "infoblox",
+        "vmware"
       ]
     },
     "xdm.target.resource.parent_id": {
@@ -34480,7 +35218,7 @@
       ]
     },
     "xdm.target.user.domain": {
-      "frequency": 5,
+      "frequency": 6,
       "synonyms": [
         {
           "synonym": "accountdomain",
@@ -34509,6 +35247,10 @@
         {
           "synonym": "targetuser",
           "count": 1
+        },
+        {
+          "synonym": "dntdom",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -34518,13 +35260,15 @@
         "properties",
         "syslog_msg",
         "targetdomainname",
-        "targetuser"
+        "targetuser",
+        "dntdom"
       ],
       "exampleVendors": [
         "cybelangel",
         "microsoft",
         "msft",
-        "vmware"
+        "vmware",
+        "infoblox"
       ]
     },
     "xdm.target.user.employee_id": {
@@ -35132,7 +35876,7 @@
       ]
     },
     "xdm.target.user.username": {
-      "frequency": 72,
+      "frequency": 79,
       "synonyms": [
         {
           "synonym": "duser",
@@ -35417,6 +36161,34 @@
         {
           "synonym": "users",
           "count": 1
+        },
+        {
+          "synonym": "bruker",
+          "count": 1
+        },
+        {
+          "synonym": "customername",
+          "count": 1
+        },
+        {
+          "synonym": "target_user",
+          "count": 1
+        },
+        {
+          "synonym": "temp_duid",
+          "count": 1
+        },
+        {
+          "synonym": "temp_duser",
+          "count": 1
+        },
+        {
+          "synonym": "user_value",
+          "count": 1
+        },
+        {
+          "synonym": "dst_user",
+          "count": 1
         }
       ],
       "synonyms_simple": [
@@ -35490,7 +36262,14 @@
         "title",
         "to_username",
         "unix_user_name",
-        "users"
+        "users",
+        "bruker",
+        "customername",
+        "target_user",
+        "temp_duid",
+        "temp_duser",
+        "user_value",
+        "dst_user"
       ],
       "exampleVendors": [
         "1password",
@@ -35504,7 +36283,9 @@
         "check",
         "cisco",
         "citrix",
-        "code42"
+        "code42",
+        "infoblox",
+        "a10"
       ]
     },
     "xdm.target.virtualization.data_center.name": {

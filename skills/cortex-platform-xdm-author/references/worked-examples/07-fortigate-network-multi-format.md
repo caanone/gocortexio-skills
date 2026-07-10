@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 Vendor / product: Fortinet / FortiGate. Datasets: `fortinet_fortigate_json_raw` (REST log export, native JSON) and `fortinet_fortigate_syslog_raw` (the same events over RFC 3164 syslog).
 
-What this walkthrough shows: the network story is created only when the full mandatory field set from [network-mapping.md](../network-mapping.md) is mapped -- padded with type-valid placeholders where the log has no value -- and that mapping is identical no matter which wire format the event arrives in. The syslog branch composes with the Stage 0 envelope from [syslog-envelope.md](../syslog-envelope.md). A third branch models an SSL-VPN login, which is BOTH an authentication and a network event: `xdm.event.tags` carries the union of the two story markers in one `arraycreate(...)`, and both mandatory sets are mapped. `scripts/profile_log.py` flags each sample deterministically; `scripts/lint_rule.py` raises advisory WARN-043 (and WARN-042 on the dual branch) for anything left unmapped -- warnings only, the exit code stays 0.
+What this walkthrough shows: the network story is created only when the full mandatory field set from [network-mapping.md](../network-mapping.md) is mapped -- padded with type-valid placeholders where the log has no value -- and that mapping is identical no matter which wire format the event arrives in. The syslog branch composes with the Stage 0 envelope from [syslog-envelope.md](../syslog-envelope.md). A third branch models an SSL-VPN login, which is authentication, VPN and network at once: `xdm.event.tags` carries the union of the three markers in one `arraycreate(...)`, and both mandatory sets are mapped. Each of these rules targets a single-purpose dataset and filters only `_raw_log != null`, so no record is dropped (the datamodel row count equals the raw count); a MIXED feed instead classifies per record and catches the rest with a sentinel -- see [record-classification.md](../record-classification.md). `scripts/profile_log.py` flags each sample deterministically; `scripts/lint_rule.py` raises advisory WARN-043 (and WARN-042 on the dual branch) for anything left unmapped -- warnings only, the exit code stays 0.
 
 ## The single canonical event
 
@@ -209,11 +209,12 @@ placeholder. The 20-field network block itself is unchanged.
 
 ## Format 3 -- the dual story: SSL-VPN login (authentication AND network)
 
-A FortiGate SSL-VPN login is one event in BOTH stories: a credential
-validation (authentication) carried over a network session (network).
-`xdm.event.tags` is an array, so the rule emits the UNION of the two
-story markers in a single `arraycreate(...)` -- never two tags
-assignments -- and maps both mandatory sets. The overlapping transport
+A FortiGate SSL-VPN login is one event in THREE tags: a credential
+validation (authentication) carried over a VPN tunnel (VPN) on a network
+session (network). `xdm.event.tags` is an array over the closed six-member
+enum, so the rule emits the UNION of the markers in a single
+`arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_VPN, XDM_CONST.EVENT_TAG_NETWORK)`
+-- never two tags assignments -- and maps both mandatory sets. The overlapping transport
 fields (addresses, ports, protocol) are mapped once and satisfy both.
 `xdm.event.type` is a single string: the authentication value wins, and
 the network story keys on the tag.
@@ -247,13 +248,13 @@ filter
     xdm.observer.vendor = "Fortinet",
     xdm.observer.product = "FortiGate",
     xdm.event.type = "authentication",
-    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK),
+    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_VPN, XDM_CONST.EVENT_TAG_NETWORK),
     xdm.event.original_event_type = _event,
     xdm.event.operation = XDM_CONST.OPERATION_TYPE_AUTH_LOGIN,
     xdm.event.outcome = if(
         _result = "success", XDM_CONST.OUTCOME_SUCCESS,
         XDM_CONST.OUTCOME_FAILED),
-    xdm.auth.service = "IDP",
+    xdm.auth.service = "SSL-VPN",
     xdm.source.user.upn = if(
         _user contains "@", _user,
         _user != null, concat(_user, "@localhost")),
@@ -263,7 +264,7 @@ filter
     xdm.source.user.user_type = if(
         _user = null, XDM_CONST.USER_TYPE_REGULAR,
         _user contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_user) ~= "^svc[-_]|service|gserviceaccount",
+        lowercase(_user) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_IP,
@@ -292,12 +293,14 @@ filter
 
 Dual-branch decisions worth copying:
 
-- ONE merged tags assignment. A second `xdm.event.tags` would overwrite
+- ONE merged tags assignment carrying all three markers
+  (`EVENT_TAG_AUTHENTICATION`, `EVENT_TAG_VPN`, `EVENT_TAG_NETWORK`, from
+  the closed six-member enum). A second `xdm.event.tags` would overwrite
   the first and silently drop a story (WARN-043 flags the duplicate).
 - `xdm.event.outcome` uses SUCCESS / FAILED only -- the authentication
   story forbids the network padding value OUTCOME_UNKNOWN, and the
   stricter story wins on a dual event.
-- The gateway is the validating side, so `xdm.auth.service = "IDP"` and
+- `xdm.auth.service = "SSL-VPN"` is the authentication service name (the FortiGate SSL-VPN portal); it is the service NAME, not a role, and
   the target side carries the appliance: `xdm.target.host.device_id`
   from `devid`, `xdm.target.port` 443 (the SSL-VPN listener),
   `xdm.target.is_internal_ip = true`. The login event logs no byte
@@ -318,7 +321,10 @@ Dual-branch decisions worth copying:
 [ ] is_internal_ip derived via incidr() when the IP is mapped
 [ ] syslog branch parses the Stage 0 envelope first (PRI-anchored, never
     a vendor literal)
-[ ] dual branch: ONE merged xdm.event.tags arraycreate; event.type keeps
-    the authentication value; outcome is SUCCESS / FAILED only
+[ ] dual branch: ONE merged xdm.event.tags arraycreate carrying
+    AUTHENTICATION + VPN + NETWORK; event.type keeps the authentication
+    value; outcome is SUCCESS / FAILED only
+[ ] single-purpose datasets, filter _raw_log != null only (no records dropped);
+    a mixed feed classifies per record + catch-all (record-classification.md)
 [ ] lint clean: no WARN-042, no WARN-043, exit 0
 ```

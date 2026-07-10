@@ -128,7 +128,7 @@ _SYSLOG_ENVELOPE_TARGETS = {
 # idiom ($ -> MACHINE_ACCOUNT; svc_/service/gserviceaccount ->
 # SERVICE_ACCOUNT; else REGULAR) from references/authentication-mapping.md.
 _AUTH_PADDABLE = [
-    ("xdm.auth.service", '"IDP"'),
+    ("xdm.auth.service", '"Login"'),
     ("xdm.network.ip_protocol", "XDM_CONST.IP_PROTOCOL_IP"),
     ("xdm.source.port", "to_integer(0)"),
     ("xdm.source.user.identity_type", "XDM_CONST.IDENTITY_TYPE_USER"),
@@ -150,7 +150,9 @@ _AUTH_MUST_EXTRACT = [
      'concat(_u, "@localhost"))'),
     ("xdm.source.ipv4",
      "real client source IP from the raw log (never static, empty, or a list)"),
-    ("xdm.event.original_event_type", "raw vendor event name exactly as logged"),
+    ("xdm.event.original_event_type",
+     "raw vendor event name exactly as logged; for the catch-all default "
+     'it to the sentinel: coalesce(_vendor_event_type, "GOCORTEX_UNMODELLED")'),
     ("xdm.event.outcome",
      "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED, on conclusive events only"),
 ]
@@ -182,6 +184,21 @@ _NETWORK_PADDABLE = [
     ("xdm.target.is_internal_ip", "false"),
     ("xdm.target.port", "to_integer(0)"),
     ("xdm.target.sent_bytes", "to_integer(0)"),
+]
+
+# Process / command-execution recommended fields (references/process-mapping.md).
+# NOT a mandatory story -- XDM has no process tag -- so these are never
+# padded; they are listed as TODOs to map from the raw log when the
+# profiler flags a process / command event. Advisory WARN-044 only guards
+# the executable-parent misuse; it does not require this set.
+_PROCESS_RECOMMEND = [
+    ("xdm.source.process.name", "short process / image name"),
+    ("xdm.source.process.command_line",
+     "full command line the process ran (a process the event acts upon "
+     "uses xdm.target.process.command_line; see process-mapping.md)"),
+    ("xdm.source.process.pid", "process id: to_integer(to_number(...))"),
+    ("xdm.source.process.executable.path",
+     "full image path (a leaf; never xdm.source.process.executable, a Number)"),
 ]
 _NETWORK_MUST_EXTRACT = [
     ("xdm.source.ipv4",
@@ -234,6 +251,7 @@ def scaffold(
     is_syslog = fmt in _SYSLOG_FORMATS
     is_auth = bool((worksheet.get("authentication") or {}).get("detected"))
     is_network = bool((worksheet.get("network") or {}).get("detected"))
+    is_process = bool((worksheet.get("process") or {}).get("detected"))
     fields = worksheet.get("fields") or []
     schema = load_xdm_paths()
 
@@ -387,10 +405,21 @@ def scaffold(
                     f"{hint}"
                 )
 
+    if is_process:
+        # Recommended, never padded. List whatever the anchor loop did not
+        # already wire, so the author maps the process family from the raw
+        # log. Advisory only (WARN-044 guards the executable-parent misuse).
+        for field, hint in _PROCESS_RECOMMEND:
+            if field not in used_targets:
+                todo_rows.append(
+                    f"//   {field:<34} -- PROCESS (recommended, map from "
+                    f"raw): {hint}"
+                )
+
     # Assemble. Observer + event.type are always present.
     header = _build_header(
         vendor, product, dataset, fmt, mapping_rows, todo_rows, is_auth,
-        is_network,
+        is_network, is_process,
     )
 
     body: List[str] = [f"[MODEL: dataset={dataset}]", "filter", "    _raw_log != null"]
@@ -423,7 +452,75 @@ def scaffold(
     body.append(",\n".join(drain_lines))
     body.append(";")
 
-    return header + "\n" + "\n".join(body) + "\n"
+    rule = header + "\n" + "\n".join(body) + "\n"
+    return _stamp_warning_count(rule)
+
+
+def _stamp_warning_count(rule: str) -> str:
+    """Resolve the provenance warning-count placeholder. Prefer the build
+    environment's value; otherwise self-lint and stamp the advisory count
+    (comments do not affect the lint, so this is stable). Keeps the
+    GOCORTEX_SKILLS_SKILL_WARNING_COUNT line overtly regexable."""
+    import os
+
+    env = os.environ.get("GOCORTEX_SKILLS_SKILL_WARNING_COUNT")
+    if env is not None:
+        count = _clean_env(env)
+    else:
+        count = str(
+            sum(1 for f in lint_rule.lint(rule) if f["severity"] == "warning")
+        )
+    return rule.replace(_WARN_COUNT_PLACEHOLDER, count, 1)
+
+
+def _skill_meta() -> tuple:
+    """(name, version) from the bundle SKILL.md frontmatter, or
+    ('unknown', 'unknown') if it cannot be read. Deterministic default so
+    the provenance block is always populated even without env overrides."""
+    name = ver = "unknown"
+    try:
+        skill = Path(__file__).resolve().parent.parent / "SKILL.md"
+        for ln in skill.read_text(encoding="utf-8").splitlines()[:12]:
+            m = re.match(r"\s*name:\s*(\S+)", ln)
+            if m and name == "unknown":
+                name = m.group(1)
+            m = re.match(r"\s*version:\s*(\S+)", ln)
+            if m and ver == "unknown":
+                ver = m.group(1)
+    except OSError:
+        pass
+    return name, ver
+
+
+def _clean_env(value: str) -> str:
+    """Keep a provenance value on one regexable line: no quotes/newlines."""
+    return re.sub(r'[\r\n"]+', " ", value).strip()
+
+
+# Placeholder the warning count is stamped into after the self-lint (see
+# scaffold()). Kept overtly greppable.
+_WARN_COUNT_PLACEHOLDER = "__PENDING__"
+
+
+def _provenance_lines() -> List[str]:
+    """The machine-regexable provenance block. NAME / VERSION come from
+    SKILL.md (env can override); MODEL and the warning count come from the
+    build environment. The `GOCORTEX_SKILLS_*` keys and quoted values give
+    a stable grep / regex target in every generated rule."""
+    import os
+
+    name, ver = _skill_meta()
+    model = _clean_env(os.environ.get("GOCORTEX_SKILLS_MODEL", "unknown"))
+    skill_name = _clean_env(os.environ.get("GOCORTEX_SKILLS_SKILL_NAME", name))
+    skill_ver = _clean_env(os.environ.get("GOCORTEX_SKILLS_SKILL_VERSION", ver))
+    return [
+        "//",
+        "// Generated via",
+        f'// GOCORTEX_SKILLS_MODEL="{model}"',
+        f'// GOCORTEX_SKILLS_SKILL_NAME="{skill_name}"',
+        f'// GOCORTEX_SKILLS_SKILL_VERSION="{skill_ver}"',
+        f'// GOCORTEX_SKILLS_SKILL_WARNING_COUNT="{_WARN_COUNT_PLACEHOLDER}"',
+    ]
 
 
 def _build_header(
@@ -435,10 +532,12 @@ def _build_header(
     todo_rows: List[str],
     is_auth: bool = False,
     is_network: bool = False,
+    is_process: bool = False,
 ) -> str:
     lines = [
         "// SPDX-FileCopyrightText: GoCortexIO",
         "// SPDX-License-Identifier: AGPL-3.0-or-later",
+        *_provenance_lines(),
         "//",
         f"// {vendor} {product} -- XDM Data Model Rule",
         f"// Dataset: {dataset}",
@@ -447,6 +546,24 @@ def _build_header(
         f"// Starter rule scaffolded from a {fmt} sample. Review every",
         "// mapping, set xdm.event.type to the right normalised category,",
         "// and complete the TODO / NOT MAPPED entries below.",
+        "//",
+        "// NOTE: classify PER RECORD, not per feed. One dataset usually",
+        "// carries several record kinds, so decide xdm.event.type and",
+        "// xdm.event.tags from each record's own discriminators via if()",
+        "// (end the tag if-chain with no default, so an unrecognised record",
+        "// gets blank tags -- never a guessed marker). The tags below cover",
+        "// the profiled shape only; add branches for the others.",
+        "//",
+        "// NOTE: never drop a record. Keep only filter _raw_log != null and",
+        "// give any record the rule cannot classify the catch-all",
+        '//   xdm.event.original_event_type = "GOCORTEX_UNMODELLED"',
+        "// so a datamodel search returns the same row count as the raw",
+        "// dataset. See references/record-classification.md.",
+        "//",
+        "// REVIEW UNMODELLED -- after deploying, list what did not classify:",
+        f"//   datamodel dataset = {dataset}",
+        '//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"',
+        f"//   | fields xdm.event.original_event_type, {dataset}._raw_log",
         "//",
         "// ALERT / EVENT FIELD MAPPING",
         "// ---------------------------",
@@ -460,11 +577,12 @@ def _build_header(
             "// NOTE: authentication event detected -- the XDM authentication "
             "story needs the full mandatory field set (see "
             "references/authentication-mapping.md). Paddable fields are seeded "
-            "with the official placeholders above; review xdm.auth.service "
-            "(SP vs IDP). The AUTH MANDATORY entries below MUST be mapped "
-            "from the raw log -- derive the specific xdm.event.operation "
-            "(never default to a guess) -- and the advisory WARN-042 flags "
-            "any left unmapped."
+            "with the official placeholders above; set xdm.auth.service to "
+            "the authentication service name from the log (Kerberos / NTLM / "
+            'OAuth2 / SSO / ...; padded "Login"). The AUTH MANDATORY entries '
+            "below MUST be mapped from the raw log -- derive the specific "
+            "xdm.event.operation (never default to a guess) -- and the "
+            "advisory WARN-042 flags any left unmapped."
         )
     if is_network:
         lines.append("//")
@@ -483,6 +601,19 @@ def _build_header(
             "// NOTE: dual event (authentication AND network) -- "
             "xdm.event.tags carries the union of both story markers in ONE "
             "arraycreate(...); xdm.event.type keeps the authentication value."
+        )
+    if is_process:
+        lines.append("//")
+        lines.append(
+            "// NOTE: process / command-execution signal detected -- map the "
+            "xdm.*.process.* family the log provides (see "
+            "references/process-mapping.md). This is a recommended set, not a "
+            "mandatory story. Never assign to xdm.*.process.executable (a "
+            "Number) -- use a leaf like executable.path. An AAA / "
+            "network-device command-accounting (cmd=) record is a command "
+            "execution, not authentication: map its command to "
+            "xdm.target.process.command_line with operation OPERATION_TYPE_AUDIT "
+            "and no outcome, not the authentication story. Advisory WARN-044."
         )
     if fmt in _SYSLOG_FORMATS:
         lines.append("//")

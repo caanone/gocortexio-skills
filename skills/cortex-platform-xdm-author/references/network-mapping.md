@@ -12,6 +12,14 @@ so this reference is the authoritative checklist for any rule that
 models a firewall, flow, proxy, IDS/IPS, DNS, or other
 traffic-between-endpoints event.
 
+Classification is PER RECORD. A firewall or gateway feed mixes flows
+with VPN logins, admin commands and status chatter, so decide the
+network tag and the mandatory set on each record from its own
+discriminators, not as one constant across the feed. Records that are
+not network events take their own treatment, and unrecognised records
+take the catch-all rather than a forced network tag. See
+[record-classification.md](record-classification.md).
+
 This guidance is host-agnostic and format-agnostic. Extraction differs
 per source format (syslog RFC 3164 / RFC 5424, JSON, JSONL, CEF, LEEF,
 key=value), but the XDM target fields and their requirement level are
@@ -87,7 +95,7 @@ placeholder so the mandatory status is met.
 | --- | --- | --- |
 | `xdm.event.outcome` | enum | Map the vendor action: allow / permit -> `XDM_CONST.OUTCOME_SUCCESS`, deny / drop / block -> `XDM_CONST.OUTCOME_FAILED`. Pad `XDM_CONST.OUTCOME_UNKNOWN`. |
 | `xdm.event.type` | string | Resolve to a value that contains `network`; pad the literal `"network"`. |
-| `xdm.event.tags` | array | `arraycreate(XDM_CONST.EVENT_TAG_NETWORK)`. On a dual authentication + network event emit ONE merged `arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK)` -- never two tags assignments. |
+| `xdm.event.tags` | array | Must include `XDM_CONST.EVENT_TAG_NETWORK` on the network records. Assign per record via one `if()` so non-network records in the same feed get their own tags (or blank). On a dual authentication + network event emit ONE merged `arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK)` -- add `EVENT_TAG_VPN` for a VPN tunnel -- never two tags assignments. See [record-classification.md](record-classification.md). |
 | `xdm.network.http.http_header.header` | string | The HTTP header name. Map when the source logs headers; otherwise `""`. (The bare `xdm.network.http.http_header` is a container node, not a mappable field -- some data models reject it -- and `xdm.network.http.response_headers` does not exist; map these two leaves.) |
 | `xdm.network.http.http_header.value` | string | The HTTP header value. Map when the source logs headers; otherwise `""`. |
 | `xdm.network.http.url_category` | enum | Map the vendor category via an `XDM_CONST.URL_CATEGORY_*` if-chain; pad `XDM_CONST.URL_CATEGORY_UNKNOWN`. Closed list in [xdm-const.md](xdm-const.md). |
@@ -213,14 +221,18 @@ filter
 `xdm.event.tags` is an array, so one event can belong to both stories.
 A VPN login is the canonical case: it is a credential validation (the
 authentication story) carried over a network session (the network
-story).
+story), so it also earns `XDM_CONST.EVENT_TAG_VPN`.
 
 Rules for a dual event:
 
 - Emit ONE merged tags assignment:
-  `xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK)`.
-  Two `xdm.event.tags` assignments is a defect (the second overwrites
-  the first).
+  `xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK)`
+  (add `XDM_CONST.EVENT_TAG_VPN` for a VPN tunnel). Two
+  `xdm.event.tags` assignments is a defect (the second overwrites the
+  first). When the feed also carries records that are neither story,
+  make this the branch of a per-record `if()` and let the others fall
+  through to their own tags or the blank catch-all
+  ([record-classification.md](record-classification.md)).
 - Map BOTH mandatory sets. The transport fields (`xdm.source.ipv4`,
   `xdm.target.ipv4`, the ports, `xdm.network.ip_protocol`) appear in
   both sets, so one mapping satisfies both.

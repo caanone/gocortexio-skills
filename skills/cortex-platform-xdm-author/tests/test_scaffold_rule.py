@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -207,7 +208,7 @@ class TestScaffoldAuthMandatory(unittest.TestCase):
             "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)",
             rule,
         )
-        self.assertIn('xdm.auth.service = "IDP"', rule)
+        self.assertIn('xdm.auth.service = "Login"', rule)
         self.assertIn(
             "xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_IP", rule
         )
@@ -350,6 +351,39 @@ class TestScaffoldCli(unittest.TestCase):
             input="not json", capture_output=True, text=True, check=False,
         )
         self.assertEqual(cp.returncode, 2)
+
+
+class TestScaffoldProvenanceBlock(unittest.TestCase):
+    """Every generated rule carries the regexable GOCORTEX_SKILLS
+    provenance block; name / version come from SKILL.md, model and the
+    warning count from the build environment (or the self-lint)."""
+
+    def test_block_present_with_all_keys(self):
+        rule = _make("sample.kv")
+        for key in (
+            "// Generated via",
+            'GOCORTEX_SKILLS_MODEL="',
+            'GOCORTEX_SKILLS_SKILL_NAME="cortex-platform-xdm-author"',
+            'GOCORTEX_SKILLS_SKILL_VERSION="',
+            'GOCORTEX_SKILLS_SKILL_WARNING_COUNT="',
+        ):
+            self.assertIn(key, rule, key)
+        # The placeholder must be resolved to a concrete count.
+        self.assertNotIn("__PENDING__", rule)
+
+    def test_env_overrides_model_and_count(self):
+        env = dict(os.environ)
+        env["GOCORTEX_SKILLS_MODEL"] = "test-model-x"
+        env["GOCORTEX_SKILLS_SKILL_WARNING_COUNT"] = "3"
+        ws = json.dumps(_worksheet("sample.kv"))
+        cp = subprocess.run(
+            [sys.executable, str(SCRIPTS / "scaffold_rule.py"), "-",
+             "--vendor", "Acme", "--product", "Demo"],
+            input=ws, capture_output=True, text=True, check=False, env=env,
+        )
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertIn('GOCORTEX_SKILLS_MODEL="test-model-x"', cp.stdout)
+        self.assertIn('GOCORTEX_SKILLS_SKILL_WARNING_COUNT="3"', cp.stdout)
 
 
 if __name__ == "__main__":

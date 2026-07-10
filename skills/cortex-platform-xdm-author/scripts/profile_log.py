@@ -1058,6 +1058,196 @@ def detect_network(
     return out
 
 
+# --------------------------------------------------------------------
+# Process / command-execution detection
+# --------------------------------------------------------------------
+
+# Recommended (NOT mandatory) process fields the profiler surfaces. XDM
+# has no process story tag, so this is advisory only -- see
+# references/process-mapping.md and lint WARN-044. Mirrored in
+# lint_rule.py's _PROCESS_RECOMMENDED.
+_PROCESS_RECOMMENDED = [
+    "xdm.source.process.name",
+    "xdm.source.process.command_line",
+    "xdm.source.process.pid",
+    "xdm.source.process.executable.path",
+]
+
+# Strong name signal: distinctive process / command vocabulary in a field
+# path. Word-ish boundaries keep "proc" out of "procedure" and "process"
+# out of "processed". A bare pid is NOT here (it is weak corroboration
+# only) -- a pid appears in countless non-process logs.
+_PROCESS_STRONG_RE = re.compile(
+    r"(?<![a-z0-9])("
+    r"command[_ ]?line|cmdline|cmdset|command[_ ]?text|"
+    r"process[_ ]?name|proc[_ ]?name|process[_ ]?path|"
+    r"image[_ ]?path|exec[_ ]?path|executable|"
+    r"script[_ ]?block|"
+    r"process|proc|cmd"
+    r")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+# Weak corroboration -- recorded when a strong signal is also present, but
+# never enough to mark a sample as a process event on its own.
+_PROCESS_WEAK_RE = re.compile(
+    r"(?<![a-z0-9])(p?pid|parent[_ ]?process|thread[_ ]?id|ppid)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+# Value signal: an executable path or an .exe reference is unambiguous
+# process evidence even when no field name carries process vocabulary
+# (a positional syslog line, say).
+_PROCESS_VALUE_RE = re.compile(
+    r"[A-Za-z]:\\[^\s\"]*\.(?:exe|dll|ps1|bat|cmd|scr|vbs)\b"
+    r"|/(?:usr|bin|sbin|opt)/[^\s\"]+"
+    r"|(?<![a-z0-9])[\w.-]+\.exe(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+# A command-accounting token inside a value: cmd= / command= / CmdSet=
+# with a value. This carries detection on positional / syslog formats
+# where the executed command lives inside the single _message value --
+# e.g. TACACS+ "type=ACCOUNTING ... cmd=\"show bgp neighbors\"", which is
+# a command execution, not an authentication event.
+_PROCESS_CMD_VALUE_RE = re.compile(
+    r'(?<![a-z0-9])(?:cmd|cmdset|command)\s*=\s*"?\S',
+    re.IGNORECASE,
+)
+
+_PROCESS_SIGNAL_CAP = 24
+
+
+def detect_process(
+    fields: dict,
+    records: "Optional[List[dict]]" = None,
+) -> dict:
+    """Auto-detect a process or command-execution event.
+
+    Conservative: a lone pid never fires. Signals:
+      * name  -- a field path carries distinctive process / command
+                 vocabulary (command_line, process_name, executable,
+                 cmd, ...). A pid / ppid is weak corroboration only.
+      * value -- a record value is an executable path, an .exe
+                 reference, or a cmd= / command= / CmdSet= token.
+                 Carries detection on positional / syslog formats where
+                 the whole line is one value (a TACACS+ type=ACCOUNTING
+                 cmd= line is a command execution, not authentication).
+
+    Independent of the auth / network blocks. A TACACS+ / AAA
+    command-accounting record carries a `cmd` token, so this block fires
+    on it deliberately: an accounting record with a command is a command
+    execution, not authentication -- map the command to
+    xdm.target.process.command_line with xdm.event.type a process value
+    and operation OPERATION_TYPE_AUDIT (see references/process-mapping.md).
+    Only the AUTHEN (login) and AUTHOR shapes are authentication. Feeds
+    advisory WARN-044; never blocks."""
+    signals: List[dict] = []
+    seen: set = set()
+    strong = False
+
+    def _add(field: str, match: str, kind: str) -> None:
+        key = (kind, field, match)
+        if key not in seen:
+            seen.add(key)
+            signals.append({"field": field, "match": match, "kind": kind})
+
+    paths = [info.get("path", "") for info in fields.values()]
+
+    for path in paths:
+        m = _PROCESS_STRONG_RE.search(path.lower())
+        if m:
+            _add(path, m.group(1), "name")
+            strong = True
+
+    def _scan_value(path: str, value: str) -> None:
+        nonlocal strong
+        vm = _PROCESS_VALUE_RE.search(value)
+        if vm:
+            _add(path, "executable path", "value")
+            strong = True
+        if _PROCESS_CMD_VALUE_RE.search(value):
+            _add(path, "cmd=", "value")
+            strong = True
+
+    if records:
+        for rec in records:
+            for path, value in flatten_record(rec).items():
+                if isinstance(value, str):
+                    _scan_value(path, value)
+            if len(signals) >= _PROCESS_SIGNAL_CAP:
+                break
+    else:
+        for info in fields.values():
+            sample = info.get("sample")
+            if isinstance(sample, str):
+                _scan_value(info.get("path", ""), sample)
+
+    # Weak corroboration is only added once a strong signal exists, so it
+    # can never trip detection on its own.
+    if strong:
+        for path in paths:
+            m = _PROCESS_WEAK_RE.search(path.lower())
+            if m:
+                _add(path, m.group(1), "weak")
+
+    out: dict = {"detected": strong, "signals": signals[:12]}
+    if strong:
+        out["recommended_fields"] = list(_PROCESS_RECOMMENDED)
+        out["guidance"] = (
+            "Process / command-execution signal detected. Map the "
+            "xdm.*.process.* family the log provides (see "
+            "references/process-mapping.md). Recommended, not mandatory "
+            "(advisory lint WARN-044). A TACACS+ / AAA command-accounting "
+            "(cmd=) record is a command execution, not authentication: map "
+            "the command to xdm.target.process.command_line with operation "
+            "OPERATION_TYPE_AUDIT and no outcome."
+        )
+    return out
+
+
+def classify(auth_block: dict, network_block: dict, process_block: dict) -> dict:
+    """Summarise the per-record classification picture for the sample.
+
+    The auth / network / process detectors are sample-level, so a sample
+    that trips more than one is carrying MORE THAN ONE record kind (a
+    TACACS+ feed with logins AND command accounting, a firewall feed with
+    flows AND VPN sign-ins). Classification is a per-RECORD decision, so
+    this block reminds the author to branch xdm.event.type and
+    xdm.event.tags per record and to catch-all everything the branches do
+    not recognise -- never to stamp one story across the whole feed. See
+    references/record-classification.md."""
+    families = [
+        name
+        for name, block in (
+            ("authentication", auth_block),
+            ("network", network_block),
+            ("process", process_block),
+        )
+        if block.get("detected")
+    ]
+    multi_kind = len(families) > 1
+    detected = ", ".join(families) if families else "none recognised"
+    guidance = (
+        "Classify PER RECORD, not per sample. Detected kind(s): "
+        f"{detected}. A dataset routinely mixes kinds, so decide "
+        "xdm.event.type and xdm.event.tags on EACH record via if() over "
+        "its own discriminators. xdm.event.tags is the closed six-member "
+        "enum (AUTHENTICATION / NETWORK / CLOUD / SAAS / ONPREM / VPN); "
+        "end the if-chain with no default so an unrecognised record gets "
+        "blank tags, never a guessed marker. Never drop a record: keep "
+        "only filter _raw_log != null and give any record no branch "
+        'matches the catch-all xdm.event.original_event_type = '
+        '"GOCORTEX_UNMODELLED", so a datamodel search returns the same row '
+        "count as the raw dataset. See references/record-classification.md."
+    )
+    return {
+        "families_detected": families,
+        "multi_kind": multi_kind,
+        "guidance": guidance,
+    }
+
+
 def profile(source_path: str, text: str) -> dict:
     fmt = detect_format(text)
     try:
@@ -1071,15 +1261,19 @@ def profile(source_path: str, text: str) -> dict:
     attach_xdm_candidates(fields, reverse_index)
 
     auth_block = detect_authentication(fields, records)
+    network_block = detect_network(
+        fields, records, auth_detected=bool(auth_block.get("detected"))
+    )
+    process_block = detect_process(fields, records)
     return {
         "source": source_path,
         "detected_format": fmt,
         "record_count": len(records),
         "recommended_pattern": recommend_pattern(fmt, arrays),
+        "classification": classify(auth_block, network_block, process_block),
         "authentication": auth_block,
-        "network": detect_network(
-            fields, records, auth_detected=bool(auth_block.get("detected"))
-        ),
+        "network": network_block,
+        "process": process_block,
         "fields": list(fields.values()),
         "object_arrays": arrays,
     }
@@ -1139,6 +1333,30 @@ def _format_text(worksheet: dict) -> str:
             "  map the mandatory set (advisory WARN-043): "
             + ", ".join(net.get("mandatory_fields", []))
         )
+    proc = worksheet.get("process") or {}
+    if proc.get("detected"):
+        sigs = proc.get("signals", [])
+        shown = ", ".join(
+            f"{s['field']}({s['match']})" for s in sigs[:5]
+        )
+        lines.append("")
+        lines.append("process / command execution:")
+        lines.append(f"  detected -- {len(sigs)} signal(s): {shown}")
+        lines.append(
+            "  map the process family (advisory WARN-044): "
+            + ", ".join(proc.get("recommended_fields", []))
+        )
+    clf = worksheet.get("classification") or {}
+    if clf:
+        lines.append("")
+        lines.append("classification (per record):")
+        fam = clf.get("families_detected") or []
+        lines.append(
+            "  detected kind(s): "
+            + (", ".join(fam) if fam else "none recognised")
+            + ("  [MULTI-KIND: classify per record]" if clf.get("multi_kind") else "")
+        )
+        lines.append("  " + clf.get("guidance", ""))
     if worksheet["object_arrays"]:
         lines.append("")
         lines.append("object_arrays:")

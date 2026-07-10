@@ -208,5 +208,50 @@ class TestCli(unittest.TestCase):
         self.assertEqual(cp.returncode, 2)
 
 
+class TestRecordLevelClassification(unittest.TestCase):
+    """Worked example 08 must classify PER RECORD: an auth shape gets the
+    authentication tag, a command-accounting record becomes a process
+    event with the command on target.process.command_line and NO auth
+    tag, and an unrecognised line falls through to the catch-all."""
+
+    def _rule(self) -> str:
+        import re
+        doc = (
+            bundle_root() / "references" / "worked-examples"
+            / "08-cisco-tacacs-aaa-multi-shape.md"
+        ).read_text(encoding="utf-8")
+        return re.findall(r"```\n(\[MODEL:.*?\n;)", doc, re.DOTALL)[0]
+
+    def test_auth_shape(self):
+        line = ('<14>Jun 19 09:50:01 aaa01 tacacsd[10]: type=AUTHENTICATION '
+                'action=PERMIT user="bob" src_ip=10.0.35.9 dvc_ip=10.0.34.10')
+        out = _v.evaluate_rule(self._rule(), line)
+        self.assertEqual(out["xdm.event.type"], "authentication")
+        self.assertEqual(out["xdm.event.tags"],
+                         ["XDM_CONST.EVENT_TAG_AUTHENTICATION"])
+
+    def test_command_accounting_is_process(self):
+        line = ('<14>Jun 19 09:51:59 aaa01 tacacsd[25]: type=ACCOUNTING '
+                'action=Stop user="alice" dvc_ip=10.0.34.10 '
+                'cmd="show bgp neighbors"')
+        out = _v.evaluate_rule(self._rule(), line)
+        self.assertEqual(out["xdm.event.type"], "process")
+        self.assertIsNone(out["xdm.event.tags"])
+        self.assertEqual(out["xdm.target.process.command_line"],
+                         "show bgp neighbors")
+        self.assertEqual(out["xdm.event.operation"],
+                         "XDM_CONST.OPERATION_TYPE_AUDIT")
+        self.assertIsNone(out["xdm.event.outcome"])
+
+    def test_unrecognised_line_catch_all(self):
+        line = ('<14>Jun 19 09:52:10 aaa01 tacacsd[7]: Inconsistent lengths '
+                'in PostSearchHook createreturnattrs')
+        out = _v.evaluate_rule(self._rule(), line)
+        self.assertEqual(out["xdm.event.type"], "GOCORTEX_UNMODELLED")
+        self.assertIsNone(out["xdm.event.tags"])
+        self.assertEqual(out["xdm.event.original_event_type"],
+                         "GOCORTEX_UNMODELLED")
+
+
 if __name__ == "__main__":
     unittest.main()

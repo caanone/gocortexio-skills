@@ -649,5 +649,83 @@ class TestNetworkDetection(unittest.TestCase):
         self.assertTrue(ws2["network"]["detected"], ws2["network"])
 
 
+class TestProcessDetection(unittest.TestCase):
+    """detect_process is conservative: distinctive process / command
+    vocabulary or an executable-path value, never a bare pid. It is
+    independent of the auth block -- a command-accounting record is both
+    reachable by AAA vocabulary and a command execution."""
+
+    def test_detects_command_accounting(self) -> None:
+        # A TACACS+-style accounting record with a command is a command
+        # execution, not (only) authentication.
+        ws = profile(
+            "acct.jsonl",
+            '{"user":"alice.admin","cmd":"show running-config",'
+            '"device":"core-sw-01","pid":"4210"}\n',
+        )
+        proc = ws["process"]
+        self.assertTrue(proc["detected"], proc)
+        self.assertIn("xdm.source.process.command_line",
+                      proc["recommended_fields"])
+
+    def test_detects_endpoint_process(self) -> None:
+        ws = profile(
+            "edr.jsonl",
+            '{"process_name":"powershell.exe","command_line":"-enc ...",'
+            '"pid":"900"}\n',
+        )
+        self.assertTrue(ws["process"]["detected"], ws["process"])
+
+    def test_detects_exe_path_value(self) -> None:
+        # No process field name, but a value is an executable path.
+        ws = profile(
+            "val.jsonl",
+            '{"detail":"launched C:\\\\Windows\\\\System32\\\\cmd.exe"}\n',
+        )
+        self.assertTrue(ws["process"]["detected"], ws["process"])
+        self.assertTrue(
+            any(s["kind"] == "value" for s in ws["process"]["signals"]),
+            ws["process"]["signals"],
+        )
+
+    def test_no_false_fire_on_pid_only(self) -> None:
+        # A lone pid is weak corroboration, never a trigger.
+        ws = profile("hc.jsonl", '{"pid":"55","message":"health check ok"}\n')
+        self.assertFalse(ws["process"]["detected"], ws["process"])
+
+    def test_no_false_fire_on_plain_log(self) -> None:
+        ws = profile("plain.jsonl", '{"src_ip":"1.1.1.1","bytes":5}\n')
+        self.assertFalse(ws["process"]["detected"])
+
+
+class TestClassificationBlock(unittest.TestCase):
+    """The worksheet surfaces a per-record classification summary so a
+    mixed feed is not collapsed into one story."""
+
+    def test_mixed_feed_reports_multiple_kinds(self) -> None:
+        # A TACACS+ feed with a login AND a command-accounting record must
+        # report BOTH families and flag the sample as multi-kind, so the
+        # author classifies per record instead of stamping one story.
+        lines = "\n".join([
+            '<14>Jun 19 09:50:01 aaa01 tacacsd[10]: type=AUTHENTICATION '
+            'action=PERMIT user="bob" src_ip=10.0.35.9',
+            '<14>Jun 19 09:51:59 aaa01 tacacsd[25]: type=ACCOUNTING '
+            'action=Stop user="alice" dvc_ip=10.0.34.10 '
+            'cmd="show bgp neighbors"',
+        ])
+        ws = profile("mixed.log", lines + "\n")
+        clf = ws["classification"]
+        self.assertIn("authentication", clf["families_detected"])
+        self.assertIn("process", clf["families_detected"])
+        self.assertTrue(clf["multi_kind"])
+        self.assertIn("GOCORTEX_UNMODELLED", clf["guidance"])
+        self.assertIn("per record", clf["guidance"].lower())
+
+    def test_classification_always_present(self) -> None:
+        ws = profile("plain.jsonl", '{"src_ip":"1.1.1.1","bytes":5}\n')
+        self.assertIn("classification", ws)
+        self.assertIn("families_detected", ws["classification"])
+
+
 if __name__ == "__main__":
     unittest.main()

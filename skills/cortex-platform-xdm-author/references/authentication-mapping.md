@@ -12,6 +12,14 @@ from the story and from identity analytics, so this reference is the
 authoritative checklist for any rule that models a login, logon, MFA,
 SSO, or other credential-validation event.
 
+Classification is PER RECORD. A feed rarely holds only logins, so decide
+the authentication tag and the mandatory set on each record from its own
+discriminators, not as one constant across the feed. Records in the same
+dataset that are not authentication (a command execution, a bare flow, a
+line the rule does not recognise) take their own treatment and, if
+unrecognised, the catch-all -- never a forced authentication tag. See
+[record-classification.md](record-classification.md).
+
 This guidance is host-agnostic and format-agnostic. Extraction differs
 per source format (syslog RFC 3164 / RFC 5424, JSON, JSONL, CEF, LEEF,
 key=value), but the XDM target fields and their requirement level are
@@ -39,7 +47,12 @@ addresses, a port, and a protocol -- a VPN login, an SSH session, a
 gateway sign-in), the event is ALSO a network connection. Apply the
 mandatory set in [network-mapping.md](network-mapping.md) on top of
 this one, with the union of the story tags in ONE
-`xdm.event.tags = arraycreate(...)`.
+`xdm.event.tags = arraycreate(...)`. Add the deployment / transport
+markers the record earns: `XDM_CONST.EVENT_TAG_VPN` for a VPN login,
+`XDM_CONST.EVENT_TAG_SAAS` for a SaaS IdP (Okta, Entra ID, Ping),
+`XDM_CONST.EVENT_TAG_CLOUD` for a cloud-provider console, or
+`XDM_CONST.EVENT_TAG_ONPREM` for on-premises directory auth. The tag set
+is closed to six members ([xdm-const.md](xdm-const.md)).
 
 When detected, `scripts/scaffold_rule.py` pre-populates the mandatory
 set: it pads the fields that have an official placeholder (tags,
@@ -77,11 +90,11 @@ is a reminder.
 | `xdm.target.port` | integer | Map the real value; otherwise `to_integer(0)`. |
 | `xdm.network.ip_protocol` | integer (enum) | Assign the appropriate `XDM_CONST.IP_PROTOCOL_*` (interactive auth over TCP -> `IP_PROTOCOL_TCP`; pad `IP_PROTOCOL_IP` when absent). |
 | `xdm.event.type` | string | Resolve to a value that contains `authentication`. |
-| `xdm.event.tags` | array | `arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION)`. |
+| `xdm.event.tags` | array | Must include `XDM_CONST.EVENT_TAG_AUTHENTICATION` on the authentication records. Assign per record via one `if()` so non-auth records in the same feed get their own tags (or blank); add `EVENT_TAG_VPN` / `EVENT_TAG_SAAS` / `EVENT_TAG_CLOUD` / `EVENT_TAG_ONPREM` when earned. See [record-classification.md](record-classification.md). |
 | `xdm.event.operation` | enum | Derive the specific `XDM_CONST.OPERATION_TYPE_*` from the event: `OPERATION_TYPE_AUTH_LOGIN` (password login), `OPERATION_TYPE_AUTH_MFA` (involves MFA), `OPERATION_TYPE_AUDIT` (authorization / accounting). There is NO neutral member, so NEVER blind-default to `AUTH_LOGIN` -- when the event kind is genuinely unclear, leave the field unmapped (or `""`) rather than asserting an operation the log does not describe. |
 | `xdm.event.original_event_type` | string | The raw vendor event name exactly as logged (e.g. `user.authentication.sso`, `microsoft.login.success`). |
 | `xdm.event.outcome` | string (enum) | Only `XDM_CONST.OUTCOME_SUCCESS` or `XDM_CONST.OUTCOME_FAILED`, and only on conclusive events. Do not set on intermediate steps. |
-| `xdm.auth.service` | string | Role in the flow: `"SP"` (service provider, initiates) or `"IDP"` (identity provider, validates). The same system can be IDP in one event and SP in another, so map per event type. |
+| `xdm.auth.service` | string | The authentication service NAME, derived from the vendor auth protocol / type / mechanism field (`Kerberos`, `NTLM`, `OAuth2`, `SAML`, `SSO`, `RADIUS`, `TACACS+`, `LDAP`, ...). A free string, NOT a role: never `"SP"` / `"IDP"` (a retired misconception -- no such XDM values exist). Normalise via an if()-chain ending in a raw passthrough; pad `"Login"` when the log carries no service field. See "Deriving xdm.auth.service" below. |
 | `xdm.source.user.upn` | string | The authenticated identity, ALWAYS UPN-shaped (`jane.doe@company.com`). Cannot be empty. This is the central correlation key across IdPs -- it is `upn`, not `username`. When the raw identity may be bare, synthesise the shape: `if(_username contains "@", _username, _username != null, concat(_username, "@localhost"))`. |
 | `xdm.source.user.identity_type` | string (enum) | The nature of the authenticated principal. Derive the `XDM_CONST.IDENTITY_TYPE_*` member: `IDENTITY_TYPE_USER` for a human principal (the common case -- anytime a real UPN is present), `IDENTITY_TYPE_MACHINE` for a computer account (name ends `$`), `IDENTITY_TYPE_BUILTIN` for a well-known OS account, `IDENTITY_TYPE_VIRTUAL` for a managed / virtual account. Fall back to `IDENTITY_TYPE_UNKNOWN` only when no principal resolves. See "Deriving xdm.source.user.identity_type" below. |
 | `xdm.source.user.user_type` | string (enum) | The account class. Derive the `XDM_CONST.USER_TYPE_*` member: `USER_TYPE_REGULAR` is the default (~90% of principals), `USER_TYPE_MACHINE_ACCOUNT` when the account name ends `$`, `USER_TYPE_SERVICE_ACCOUNT` for a service-account naming convention (`svc_` / `svc-` prefix, `service` in the name, a GCP `*.iam.gserviceaccount.com` identity). ALWAYS emit the derivation (defaulting to `USER_TYPE_REGULAR`), keyed on an explicit account-type field when the log carries one, otherwise on the principal name. See "Deriving xdm.source.user.user_type" below. Distinct from `xdm.source.user.identity_type`. |
@@ -235,7 +248,7 @@ conventions):
     xdm.source.user.user_type = if(
         _principal = null, XDM_CONST.USER_TYPE_REGULAR,
         _principal contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_principal) ~= "^svc[-_]|service|gserviceaccount|^www-data$|^nobody$|^daemon$",
+        lowercase(_principal) ~= "^svc[-_.]|service|gserviceaccount|^www-data$|^nobody$|^daemon$",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR)
 ```
@@ -244,6 +257,51 @@ These are heuristics: a real user whose name happens to contain
 "service" is misclassified, but the cost is low and `USER_TYPE_REGULAR`
 catches everything the patterns miss. Only extend the service-account
 pattern list from real vendor conventions -- never invent a prefix.
+
+## Deriving xdm.auth.service
+
+`xdm.auth.service` is the authentication service NAME -- the protocol,
+mechanism or service that performed the authentication (`Kerberos`,
+`NTLM`, `OAuth2`, `SAML`, `SSO`, `RADIUS`, `TACACS+`, `LDAP`, `Login`,
+`MFA`, ...). It is a free String, NOT a role: there is no `"SP"` /
+`"IDP"` in XDM. Derive it from the vendor's auth-protocol field --
+common source names in the anchor dictionary are `authenticationprotocol`,
+`authentication_type`, `authenticationsource`, `protocol`,
+`logonprocessname`, `tokenissuertype`.
+
+Normalise the raw value to a canonical service name with an if()-chain,
+and end the chain with a raw passthrough so an unrecognised service is
+preserved rather than dropped (the standard categorical-field rule).
+When the log carries no service field at all, pad `"Login"`.
+
+| Vendor value contains | xdm.auth.service |
+| --- | --- |
+| `kerberos` / `krb` | `"Kerberos"` |
+| `ntlm` | `"NTLM"` |
+| `oauth` | `"OAuth2"` |
+| `saml` | `"SAML"` |
+| `radius` | `"RADIUS"` |
+| `tacacs` | `"TACACS+"` |
+| `ldap` | `"LDAP"` |
+| `sso` | `"SSO"` |
+| anything else | the raw value, unchanged (passthrough) |
+| no service field in the log | `"Login"` (generic default) |
+
+Representative idiom over an extracted `_svc` temp:
+
+```
+    xdm.auth.service = if(
+        _svc = null, "Login",
+        lowercase(_svc) contains "kerberos", "Kerberos",
+        lowercase(_svc) contains "ntlm", "NTLM",
+        lowercase(_svc) contains "oauth", "OAuth2",
+        lowercase(_svc) contains "saml", "SAML",
+        lowercase(_svc) contains "radius", "RADIUS",
+        lowercase(_svc) contains "tacacs", "TACACS+",
+        lowercase(_svc) contains "ldap", "LDAP",
+        lowercase(_svc) contains "sso", "SSO",
+        _svc)
+```
 
 ## Worked shape (JSON source)
 
@@ -260,7 +318,8 @@ filter
     _src_ip = json_extract_scalar(_raw_log, "$.client.ipAddress"),
     _src_port = json_extract_scalar(_raw_log, "$.client.port"),
     _result = json_extract_scalar(_raw_log, "$.outcome.result"),
-    _factor = json_extract_scalar(_raw_log, "$.authenticationContext.method")
+    _factor = json_extract_scalar(_raw_log, "$.authenticationContext.method"),
+    _svc = json_extract_scalar(_raw_log, "$.authenticationContext.authenticationProvider")
 | alter
     xdm.event.type = if(_event != null, "authentication", ""),
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
@@ -271,7 +330,15 @@ filter
     xdm.event.outcome = if(
         _result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
         _result != null, XDM_CONST.OUTCOME_FAILED),
-    xdm.auth.service = "IDP",
+    xdm.auth.service = if(
+        _svc = null, "Login",
+        lowercase(_svc) contains "kerberos", "Kerberos",
+        lowercase(_svc) contains "ntlm", "NTLM",
+        lowercase(_svc) contains "oauth", "OAuth2",
+        lowercase(_svc) contains "saml", "SAML",
+        lowercase(_svc) contains "ldap", "LDAP",
+        lowercase(_svc) contains "sso", "SSO",
+        _svc),
     xdm.source.user.upn = _upn,
     xdm.source.user.identity_type = if(
         _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
@@ -279,7 +346,7 @@ filter
     xdm.source.user.user_type = if(
         _upn = null, XDM_CONST.USER_TYPE_REGULAR,
         _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_]|service|gserviceaccount",
+        lowercase(_upn) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src_ip,
@@ -332,7 +399,7 @@ Topology -- three parties, not two:
 | Principal (the human or service account) | `user=` | `xdm.source.user.upn` (and `.username`) |
 | Principal's workstation | `src_ip=` | `xdm.source.ipv4` |
 | Network device being accessed | `dvc_ip=` / `at <ip>` | `xdm.target.ipv4` |
-| AAA server (validates) | syslog envelope host | `xdm.observer.name` (Stage 0); `xdm.auth.service = "IDP"` |
+| AAA server (validates) | syslog envelope host | `xdm.observer.name` (Stage 0); `xdm.auth.service` = the AAA protocol (`"TACACS+"` / `"RADIUS"`) |
 
 Rules specific to this family:
 
@@ -347,12 +414,26 @@ Rules specific to this family:
   real transport flow (protocol, ports, byte counts); the profiler
   applies the same rule automatically.
 - Accounting Start / Stop is session lifecycle, not success or failure:
-  leave `xdm.event.outcome` unset there, use
+  leave `xdm.event.outcome` unset there (the outcome if-chain
+  deliberately has no default, so it stays null on lifecycle rows), use
   `XDM_CONST.OPERATION_TYPE_AUDIT` for the operation, and map
-  `task_id` -> `xdm.network.session_id`, `elapsed_time` ->
-  `xdm.event.duration`, `cmd` -> `xdm.event.operation_sub_type`
-  (command accounting). On the authentication shapes, the operation is
+  `task_id` -> `xdm.network.session_id` and `elapsed_time` ->
+  `xdm.event.duration`. `elapsed_time` is SECONDS and
+  `xdm.event.duration` is MILLISECONDS, so multiply by 1000 in function
+  form: `to_integer(multiply(to_number(_elapsed), 1000))` (never infix
+  `* 1000`). On the authentication shapes, the operation is
   `OPERATION_TYPE_AUTH_LOGIN` and the auth method is `"password"`.
+- Command accounting is a COMMAND EXECUTION, not an authentication
+  event. An accounting record carrying a command (`cmd=`, `CmdSet`) is
+  its own event: set `xdm.event.type` to a process value (for example
+  `"process"` -- it must NOT contain "authentication"), map the executed
+  command to `xdm.target.process.command_line`, keep operation
+  `XDM_CONST.OPERATION_TYPE_AUDIT` with no outcome, put the operator on
+  `xdm.source.user.*` and the administered device on `xdm.target.*`, and
+  do NOT tag it `EVENT_TAG_AUTHENTICATION`. Only the AUTHEN (login) and
+  AUTHOR (authorization) shapes are authentication; see
+  [process-mapping.md](process-mapping.md). This is the one AAA record
+  kind that leaves the authentication story.
 - `xdm.event.outcome_reason`: normalise the known vendor reasons
   (`Bad Password` -> `bad_credentials`, `No such user` ->
   `user_does_not_exist`) and pass unknown reasons through unchanged --

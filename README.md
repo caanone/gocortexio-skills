@@ -33,13 +33,16 @@ Each bundle states its own scope in its `SKILL.md`. The `cortex-platform-xdm-aut
 
 ## Runtime dependencies
 
-The `cortex-platform-xdm-author` bundle ships three Python helpers under `scripts/`:
+The `cortex-platform-xdm-author` bundle ships a set of Python helpers under `scripts/` covering the profile -> scaffold -> lint -> verify loop:
 
-- `profile_log.py` -- static profiler for raw log samples.
-- `lookup_anchor.py` -- query the shipped field-anchor synonym index.
-- `lint_rule.py` -- standalone syntactic linter for a single rule file.
+- `profile_log.py` -- static profiler for raw log samples (fields, types, null rates, detection, recommended extraction pattern).
+- `scaffold_rule.py` -- turns a profiler worksheet into a lint-clean starter rule.
+- `lookup_anchor.py` -- query the shipped field-anchor synonym index (forward, `--reverse`, `--related`).
+- `xdm_const_mapper.py` / `mitre_map.py` -- emit XDM_CONST if-chains and MITRE arraymap chains.
+- `lint_rule.py` -- standalone syntactic / schema / dataflow linter for a single rule file.
+- `verify_rule.py` -- evaluate a rule against a sample offline, no tenant required.
 
-All three are Python 3.9+ stdlib only: no `pip install`, no Node, no network. They run anywhere a Python interpreter is available. If no Python is available, the reference markdown remains usable as a manual checklist; see the bundle's own `SKILL.md` for the fallback workflow.
+All are Python 3.9+ stdlib only: no `pip install`, no Node, no network. They run anywhere a Python interpreter is available. If no Python is available, the reference markdown remains usable as a manual checklist; see the bundle's own `SKILL.md` for the fallback workflow.
 
 ## Licence
 

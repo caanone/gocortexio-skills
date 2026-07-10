@@ -233,7 +233,7 @@ filter _raw_log != null
         XDM_CONST.IDENTITY_TYPE_UNKNOWN),
     xdm.source.user.user_type = if(
         _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_]|service", XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        lowercase(_upn) ~= "^svc[-_.]|service", XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src,
     xdm.source.port = to_integer(to_number(_sport)),
@@ -362,6 +362,31 @@ filter _raw_log != null
                 if v["rule_id"] == "WARN-042" and "raw literal" in v["message"]
             ]
             self.assertEqual(vios, [], (field, rhs, vios))
+
+    def test_auth_service_deprecated_role_token_flagged(self):
+        # xdm.auth.service is the service NAME, not a role. The retired
+        # "SP"/"IDP" literal must be flagged so old rules are migrated.
+        for rhs in ('"IDP"', '"SP"', '"idp"'):
+            vios = [
+                v for v in lint(self._account_class_rule(
+                    "xdm.auth.service", rhs))
+                if v["rule_id"] == "WARN-042"
+                and "deprecated SP/IDP role token" in v["message"]
+            ]
+            self.assertEqual(len(vios), 1, (rhs, vios))
+            self.assertEqual(vios[0]["severity"], "warning")
+
+    def test_auth_service_real_name_not_flagged(self):
+        # A real authentication service name (or a temp) is a valid free
+        # string and must never trip value conformance.
+        for rhs in ('"Kerberos"', '"TACACS+"', '"OAuth2"', '"Login"',
+                    "svc_col"):
+            vios = [
+                v for v in lint(self._account_class_rule(
+                    "xdm.auth.service", rhs))
+                if v["rule_id"] == "WARN-042" and "auth.service" in v["message"]
+            ]
+            self.assertEqual(vios, [], (rhs, vios))
 
     _SIGNAL_ONLY_AUTH = """[MODEL: dataset=acme_idp_raw]
 filter _raw_log != null
@@ -1107,6 +1132,131 @@ class TestCascadeHint(unittest.TestCase):
         self.assertIn("ERR-012", ids)
         self.assertIn("ERR-015", ids)
         self.assertIn("INFO-012", ids)
+
+
+class TestWarn044Process(unittest.TestCase):
+    """WARN-044 is the process / command-execution advisory. Its one
+    high-signal check is the executable-parent misuse: a value assigned to
+    xdm.*.process.executable (a Number container) instead of a leaf."""
+
+    def _rule(self, target: str) -> str:
+        return (
+            "[MODEL: dataset=acme_edr_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    _p = json_extract_scalar(_raw_log, "$.image")\n'
+            "| alter\n"
+            f"    {target} = _p,\n"
+            "    xdm.source.process.name = _p\n"
+            ";\n"
+        )
+
+    def test_executable_parent_flagged(self):
+        for side in ("source", "target", "intermediate"):
+            vios = [
+                v for v in lint(self._rule(f"xdm.{side}.process.executable"))
+                if v["rule_id"] == "WARN-044"
+            ]
+            self.assertEqual(len(vios), 1, (side, vios))
+            self.assertEqual(vios[0]["severity"], "warning")
+
+    def test_executable_leaf_not_flagged(self):
+        for leaf in ("executable.path", "executable.filename"):
+            vios = [
+                v for v in lint(self._rule(f"xdm.source.process.{leaf}"))
+                if v["rule_id"] == "WARN-044"
+            ]
+            self.assertEqual(vios, [], (leaf, vios))
+
+    def test_advisory_only_exit_zero(self):
+        # WARN-044 is warning severity, so a rule whose only issue is the
+        # executable-parent misuse must not raise an error-severity finding.
+        vios = lint(self._rule("xdm.source.process.executable"))
+        sev = {v["severity"] for v in vios if v["rule_id"] == "WARN-044"}
+        self.assertEqual(sev, {"warning"})
+
+    def test_silent_on_non_process_rule(self):
+        ids = _rule_ids("clean_rule.xql")
+        self.assertNotIn("WARN-044", ids)
+
+
+class TestWarn045EventTagEnum(unittest.TestCase):
+    """xdm.event.tags is a closed six-member enum; an invented tag is
+    flagged (WARN-045, advisory), the six real members are not."""
+
+    def _rule(self, tags_rhs: str) -> str:
+        return (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    xdm.observer.vendor = "V",\n'
+            '    xdm.event.type = "network",\n'
+            f"    xdm.event.tags = {tags_rhs}\n;\n"
+        )
+
+    def test_invented_tag_flagged(self):
+        rule = self._rule(
+            "arraycreate(XDM_CONST.EVENT_TAG_NETWORK, XDM_CONST.EVENT_TAG_IAM)"
+        )
+        vios = [v for v in lint(rule) if v["rule_id"] == "WARN-045"]
+        self.assertEqual(len(vios), 1, vios)
+        self.assertEqual(vios[0]["severity"], "warning")
+        self.assertIn("EVENT_TAG_IAM", vios[0]["message"])
+
+    def test_all_six_members_accepted(self):
+        rule = self._rule(
+            "arraycreate("
+            "XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK, "
+            "XDM_CONST.EVENT_TAG_CLOUD, XDM_CONST.EVENT_TAG_SAAS, "
+            "XDM_CONST.EVENT_TAG_ONPREM, XDM_CONST.EVENT_TAG_VPN)"
+        )
+        self.assertNotIn("WARN-045", _rule_ids_from(rule))
+
+    def test_per_record_if_chain_accepted(self):
+        rule = self._rule(
+            "if(_x != null, "
+            "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, "
+            "XDM_CONST.EVENT_TAG_SAAS), null)"
+        )
+        self.assertNotIn("WARN-045", _rule_ids_from(rule))
+
+
+class TestWarn046CatchAll(unittest.TestCase):
+    """A content filter beyond `_raw_log != null` drops records unless the
+    rule carries the GOCORTEX_UNMODELLED catch-all sentinel (WARN-046,
+    advisory)."""
+
+    def test_content_filter_without_catchall_flagged(self):
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            '| filter _raw_log contains "type=AUTH"\n'
+            "| alter\n"
+            '    xdm.observer.vendor = "V"\n;\n'
+        )
+        vios = [v for v in lint(rule) if v["rule_id"] == "WARN-046"]
+        self.assertEqual(len(vios), 1, vios)
+        self.assertEqual(vios[0]["severity"], "warning")
+
+    def test_content_filter_with_sentinel_not_flagged(self):
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            '| filter _raw_log contains "type=AUTH"\n'
+            "| alter\n"
+            '    xdm.observer.vendor = "V",\n'
+            '    xdm.event.original_event_type = "GOCORTEX_UNMODELLED"\n;\n'
+        )
+        self.assertNotIn("WARN-046", _rule_ids_from(rule))
+
+    def test_null_guard_only_not_flagged(self):
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter _raw_log != null\n"
+            "| alter\n"
+            '    xdm.observer.vendor = "V"\n;\n'
+        )
+        self.assertNotIn("WARN-046", _rule_ids_from(rule))
 
 
 if __name__ == "__main__":

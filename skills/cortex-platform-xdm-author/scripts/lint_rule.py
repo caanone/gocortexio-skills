@@ -1872,7 +1872,9 @@ _AUTH_FIELD_HINT = {
     "xdm.event.original_event_type": "carry the raw vendor event name",
     "xdm.event.outcome": "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED only, "
     "on conclusive events",
-    "xdm.auth.service": 'name the role in the flow: "SP" or "IDP"',
+    "xdm.auth.service": "the authentication service name (Kerberos / "
+    "NTLM / OAuth2 / SAML / SSO / RADIUS / TACACS+ / LDAP); normalise the "
+    'vendor protocol field, pad "Login" when absent',
     "xdm.source.user.upn": "the authenticated identity in UPN format "
     "(the authentication-story correlation key)",
     "xdm.source.user.identity_type": "derive the XDM_CONST.IDENTITY_TYPE_* "
@@ -1925,7 +1927,11 @@ _AUTH_SIGNAL_FIELDS = (
 _AUTH_ANY_OPERATION_RE = re.compile(r"OPERATION_TYPE_[A-Z_]+")
 _AUTH_OUTCOME_RE = re.compile(r"OUTCOME_[A-Z_]+")
 _AUTH_OUTCOME_OK = {"OUTCOME_SUCCESS", "OUTCOME_FAILED"}
-_AUTH_SERVICE_OK = {"SP", "IDP"}
+# xdm.auth.service is a free-string service NAME, so there is no allowed
+# vocabulary to enforce. The only definite error is the deprecated
+# "SP"/"IDP" role token from the retired v1 guidance -- flagged so old
+# rules are migrated to a real service name.
+_AUTH_SERVICE_DEPRECATED = {"SP", "IDP"}
 
 
 def _rhs_has_dynamic(rhs: str) -> bool:
@@ -2097,15 +2103,23 @@ def _auth_value_issues(path: str, rhs: str) -> List[tuple]:
                 "conclusive events only.",
             ))
     elif path == "xdm.auth.service":
-        if lits and not _rhs_has_dynamic(rhs) and not any(
-            s in _AUTH_SERVICE_OK for s in lits
-        ):
-            issues.append((
-                "This rule models an authentication event, but "
-                'xdm.auth.service is not "SP" or "IDP".',
-                'Name the role in the flow: "SP" (initiates) or "IDP" '
-                "(validates).",
-            ))
+        # xdm.auth.service is the authentication service NAME (a free
+        # String: Kerberos, NTLM, OAuth2, SSO, ...), not a role. The only
+        # value error we can be certain of is the deprecated "SP"/"IDP"
+        # role token from the retired v1 guidance -- flag it so old rules
+        # get migrated. Any other free-string service name is accepted.
+        if _rhs_is_static_literal(rhs):
+            body = rhs.strip().rstrip(",").strip()
+            if body.strip('"').upper() in _AUTH_SERVICE_DEPRECATED:
+                issues.append((
+                    "This rule models an authentication event, but "
+                    "xdm.auth.service is the deprecated SP/IDP role token. "
+                    "xdm.auth.service is the authentication service NAME "
+                    "(a free String), not a role.",
+                    "Map the authentication service name from the vendor "
+                    "protocol field (Kerberos / NTLM / OAuth2 / SAML / SSO "
+                    '/ RADIUS / TACACS+ / LDAP), or pad "Login".',
+                ))
     return issues
 
 
@@ -2522,6 +2536,168 @@ def _join_with_offsets(lines: List[str]) -> Tuple[str, List[int]]:
 # --------------------------------------------------------------------
 
 
+# ----- WARN-044  process / command-execution advisory
+
+# Recommended (NOT mandatory) process fields -- XDM has no process story
+# tag, so there is no mandatory gate. Mirrors _PROCESS_RECOMMENDED in
+# profile_log.py. See references/process-mapping.md.
+_PROCESS_RECOMMENDED = [
+    "xdm.source.process.name",
+    "xdm.source.process.command_line",
+    "xdm.source.process.pid",
+    "xdm.source.process.executable.path",
+]
+
+# The executable parent node is typed Number in the schema (it is a
+# container, not the image name). Assigning a value to it -- instead of a
+# leaf such as executable.path / executable.filename -- silently mistypes
+# the field. This is the one high-signal, zero-ambiguity process error.
+_PROCESS_EXECUTABLE_PARENT_RE = re.compile(
+    r"^xdm\.(?:source|target|intermediate)\.process\.executable$"
+)
+
+
+def _check_warn044(code_lines: List[str]) -> List[dict]:
+    """Advisory for process / command-execution mappings. Flags a value
+    assigned to the xdm.*.process.executable parent (a Number container),
+    which mistypes the field -- the image name belongs on a leaf
+    (executable.path / executable.filename). Advisory only (warning
+    severity), so the exit code stays 0. See
+    references/process-mapping.md."""
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    for a in _top_level_xdm_assignments(code_lines):
+        if _PROCESS_EXECUTABLE_PARENT_RE.match(a["path"]):
+            out.append(
+                _violation(
+                    "WARN-044",
+                    "warning",
+                    a["line"],
+                    f"{a['path']} is the executable parent node (typed "
+                    "Number in the schema), not the image name, so this "
+                    "assignment mistypes the field.",
+                    "Map a leaf instead: <side>.process.executable.path or "
+                    "executable.filename (see references/process-mapping.md).",
+                )
+            )
+    return out
+
+
+# ----- WARN-045  event.tags conformance to the closed EVENT_TAG enum
+
+# xdm.event.tags is a CLOSED six-member enum. Any other EVENT_TAG_* token
+# is invented and mistypes the field. See references/xdm-const.md.
+_VALID_EVENT_TAGS = {
+    "EVENT_TAG_AUTHENTICATION",
+    "EVENT_TAG_NETWORK",
+    "EVENT_TAG_CLOUD",
+    "EVENT_TAG_SAAS",
+    "EVENT_TAG_ONPREM",
+    "EVENT_TAG_VPN",
+}
+_EVENT_TAG_TOKEN_RE = re.compile(r"EVENT_TAG_[A-Z0-9_]+")
+
+
+def _check_warn045(code_lines: List[str]) -> List[dict]:
+    """Flag any EVENT_TAG_* token in an xdm.event.tags assignment that is
+    not a member of the closed six-member EVENT_TAG enum (AUTHENTICATION,
+    NETWORK, CLOUD, SAAS, ONPREM, VPN). An invented tag mistypes the
+    field. Advisory only (warning severity), so the exit code stays 0. See
+    references/xdm-const.md."""
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    for a in _top_level_xdm_assignments(code_lines):
+        if a["path"] != "xdm.event.tags":
+            continue
+        bad = sorted(
+            {
+                t
+                for t in _EVENT_TAG_TOKEN_RE.findall(a["rhs"])
+                if t not in _VALID_EVENT_TAGS
+            }
+        )
+        if bad:
+            out.append(
+                _violation(
+                    "WARN-045",
+                    "warning",
+                    a["line"],
+                    "xdm.event.tags uses "
+                    + ", ".join(bad)
+                    + ", which is not a member of the closed EVENT_TAG enum.",
+                    "Use only XDM_CONST.EVENT_TAG_AUTHENTICATION / "
+                    "EVENT_TAG_NETWORK / EVENT_TAG_CLOUD / EVENT_TAG_SAAS / "
+                    "EVENT_TAG_ONPREM / EVENT_TAG_VPN "
+                    "(see references/xdm-const.md).",
+                )
+            )
+    return out
+
+
+# ----- WARN-046  record-dropping content filter without a catch-all
+
+# The only filter that does not shrink the datamodel row count is the
+# `_raw_log != null` guard (it drops only empty records). Any other filter
+# predicate narrows by content, so a `datamodel` search returns fewer rows
+# than the raw dataset -- unless the rule instead classifies per record and
+# gives the unmatched records the catch-all sentinel. See
+# references/record-classification.md.
+_CATCHALL_SENTINEL = "GOCORTEX_UNMODELLED"
+_NULL_GUARD_RE = re.compile(r"_raw_log\s*!=\s*null", re.IGNORECASE)
+
+
+def _check_warn046(code_lines: List[str]) -> List[dict]:
+    """Advisory when a MODEL rule narrows records with a content filter
+    (anything beyond the `_raw_log != null` guard) yet carries no catch-all
+    (the GOCORTEX_UNMODELLED sentinel). Such a filter drops the unmatched
+    records, so a `datamodel` search returns fewer rows than the raw
+    dataset. Advisory only (warning severity), so the exit code stays 0.
+    See references/record-classification.md."""
+    if not _is_model(code_lines):
+        return []
+    if _CATCHALL_SENTINEL in "\n".join(code_lines):
+        return []
+    stage_of, start_idx = _classify_stages(code_lines)
+    out: List[dict] = []
+    seen_starts: set = set()
+    for i, kind in enumerate(stage_of):
+        if kind != "filter":
+            continue
+        start = start_idx[i]
+        if start in seen_starts:
+            continue
+        seen_starts.add(start)
+        pred_lines = [
+            _strip_strings(code_lines[j])
+            for j in range(len(stage_of))
+            if start_idx[j] == start and stage_of[j] == "filter"
+        ]
+        pred = " ".join(pred_lines)
+        pred = re.sub(r"^\s*\|?\s*filter\b", "", pred, count=1)
+        stripped = _NULL_GUARD_RE.sub("", pred)
+        remainder = re.sub(r"\b(and|or|not)\b", " ", stripped, flags=re.IGNORECASE)
+        remainder = re.sub(r"[()\s\"']", "", remainder)
+        if remainder:
+            out.append(
+                _violation(
+                    "WARN-046",
+                    "warning",
+                    start + 1,
+                    "This filter narrows records by content beyond the "
+                    "_raw_log != null guard, but the rule has no catch-all, "
+                    "so a datamodel search returns fewer rows than the raw "
+                    "dataset (the unmatched records are dropped).",
+                    "Keep only filter _raw_log != null, classify per record, "
+                    "and give unmatched records the catch-all "
+                    'xdm.event.original_event_type = "GOCORTEX_UNMODELLED" '
+                    "(see references/record-classification.md).",
+                )
+            )
+    return out
+
+
 def lint(source: str) -> List[dict]:
     """Return the ordered list of violations for ``source``."""
     code_lines = source.splitlines()
@@ -2559,6 +2735,9 @@ def lint(source: str) -> List[dict]:
     findings += _check_warn041(code_lines)
     findings += _check_warn042(code_lines)
     findings += _check_warn043(code_lines)
+    findings += _check_warn044(code_lines)
+    findings += _check_warn045(code_lines)
+    findings += _check_warn046(code_lines)
     findings += _check_info013(code_lines)
 
     findings.sort(key=lambda v: (v["line"], v["rule_id"]))

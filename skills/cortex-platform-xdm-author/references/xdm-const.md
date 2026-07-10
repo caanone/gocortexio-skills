@@ -319,21 +319,38 @@ XDM_CONST.OPERATION_TYPE_AUDIT
 
 ## Event tag (story markers)
 
-`EVENT_TAG` is a broad, mostly non-enumerated group (see below). The
-members enumerated here are the story markers: the authentication tag
-is mandatory on every authentication event
-([authentication-mapping.md](authentication-mapping.md)) and the
-network tag on every network event
-([network-mapping.md](network-mapping.md)). Assign via `arraycreate()`
-because `xdm.event.tags` is an array -- and because it is an array, one
-event can carry BOTH tags: emit a single
-`arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_NETWORK)`
-for a dual event, never two `xdm.event.tags` assignments.
+`EVENT_TAG` is a CLOSED enum of six story markers. Use only these; never
+invent another `EVENT_TAG_*` token.
 
 ```
 XDM_CONST.EVENT_TAG_AUTHENTICATION
 XDM_CONST.EVENT_TAG_NETWORK
+XDM_CONST.EVENT_TAG_CLOUD
+XDM_CONST.EVENT_TAG_SAAS
+XDM_CONST.EVENT_TAG_ONPREM
+XDM_CONST.EVENT_TAG_VPN
 ```
+
+`xdm.event.tags` is an Array, so one event can carry SEVERAL markers:
+an Okta login is authentication AND SaaS
+(`arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS)`),
+a FortiGate SSL-VPN login is authentication, VPN and network
+(`arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_VPN, XDM_CONST.EVENT_TAG_NETWORK)`).
+The authentication tag belongs on every authentication event
+([authentication-mapping.md](authentication-mapping.md)) and the
+network tag on every network event
+([network-mapping.md](network-mapping.md)); CLOUD / SAAS / ONPREM / VPN
+are added when the deployment or transport genuinely matches.
+
+Tags are decided PER RECORD, not per feed. A single dataset usually
+carries several record kinds, so assign one `xdm.event.tags = if(...)`
+whose branches test each record's own discriminators and END WITH NO
+DEFAULT, so a record that matches no known kind gets blank tags (never a
+guessed marker). See
+[record-classification.md](record-classification.md) for the per-record
+idiom and the catch-all that keeps the datamodel row count equal to the
+raw row count. Emit ONE `xdm.event.tags` assignment; a second silently
+overwrites the first.
 
 ## Privilege level (`xdm.auth.privilege_level`)
 
@@ -417,6 +434,6 @@ XDM_CONST.USER_TYPE_MACHINE_ACCOUNT
 
 The following groups have large, vendor-specific, or unstable value lists and are NOT enumerated in this file. For these, follow the OMIT-and-fall-back rule in [pitfall-traps.md](pitfall-traps.md) -- do NOT invent constants.
 
-`AGENT_TYPE`, `CLOUD_SERVICE_TYPE`, `DCERPC_OPERATION`, `DHCP_MESSAGE_TYPE`, `DNS_RECORD_TYPE`, `DNS_RESPONSE_CODE`, `DB_OPERATION`, `EVENT_TAG` (beyond the two story markers enumerated above), `INTEGRITY_LEVEL`, `LDAP_BIND_AUTH_TYPE`, `LDAP_OPERATION`, `LDAP_SCOPE`, `REGISTRY_VALUE_TYPE`, `SCOPE_TYPE`, `SIGNATURE_STATUS`.
+`AGENT_TYPE`, `CLOUD_SERVICE_TYPE`, `DCERPC_OPERATION`, `DHCP_MESSAGE_TYPE`, `DNS_RECORD_TYPE`, `DNS_RESPONSE_CODE`, `DB_OPERATION`, `INTEGRITY_LEVEL`, `LDAP_BIND_AUTH_TYPE`, `LDAP_OPERATION`, `LDAP_SCOPE`, `REGISTRY_VALUE_TYPE`, `SCOPE_TYPE`, `SIGNATURE_STATUS`.
 
 If a vendor value definitively maps to a member of one of these groups and the user can confirm, you may use it -- otherwise leave the XDM target unset or use the String fallback documented in [pitfall-traps.md](pitfall-traps.md).

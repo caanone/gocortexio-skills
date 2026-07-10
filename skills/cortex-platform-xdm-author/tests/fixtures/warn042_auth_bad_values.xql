@@ -26,7 +26,7 @@ filter
     xdm.event.operation = XDM_CONST.OPERATION_TYPE_CREATE,
     xdm.event.original_event_type = _action,
     xdm.event.outcome = XDM_CONST.OUTCOME_UNKNOWN,
-    xdm.auth.service = "LOCAL",
+    xdm.auth.service = "IDP",
     xdm.source.user.upn = _user,
     xdm.source.user.identity_type = XDM_CONST.IDENTITY_TYPE_USER,
     xdm.source.user.user_type = XDM_CONST.USER_TYPE_REGULAR,

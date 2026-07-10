@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 Vendor / product: Okta / Identity Cloud. Datasets: `okta_systemlog_json_raw` (System Log API, native JSON) and `okta_systemlog_syslog_raw` (same events relayed through a SIEM syslog connector).
 
-What this walkthrough shows: the authentication story is created only when the full mandatory field set from [authentication-mapping.md](../authentication-mapping.md) is mapped, and that mapping is identical no matter which wire format the event arrives in. The same login is presented as JSON and as an RFC 5424 syslog line; the extraction stage differs, the XDM assignment stage does not. Auto-detection is deterministic: `scripts/profile_log.py` flags either sample as an authentication event, and `scripts/lint_rule.py` raises advisory WARN-042 (warning only, exit code stays 0) for any mandatory field left unmapped.
+What this walkthrough shows: the authentication story is created only when the full mandatory field set from [authentication-mapping.md](../authentication-mapping.md) is mapped, and that mapping is identical no matter which wire format the event arrives in. The same login is presented as JSON and as an RFC 5424 syslog line; the extraction stage differs, the XDM assignment stage does not. Because Okta is a SaaS identity provider, each login carries `EVENT_TAG_SAAS` alongside `EVENT_TAG_AUTHENTICATION`, decided per record: a well-formed login gets both tags, a malformed row (no `eventType`) falls through to the catch-all (`xdm.event.original_event_type = "GOCORTEX_UNMODELLED"`, blank tags) rather than being tagged or dropped, so the datamodel row count still equals the raw count (see [record-classification.md](../record-classification.md)). Auto-detection is deterministic: `scripts/profile_log.py` flags either sample as an authentication event, and `scripts/lint_rule.py` raises advisory WARN-042 (warning only, exit code stays 0) for any mandatory field left unmapped.
 
 ## The single canonical event
 
@@ -81,16 +81,19 @@ filter
     xdm.observer.vendor = "Okta",
     xdm.observer.product = "Identity Cloud",
     // Mandatory authentication-story set (references/authentication-mapping.md)
-    xdm.event.type = if(_event != null, "authentication", ""),
-    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-    xdm.event.original_event_type = _event,
+    xdm.event.type = if(_event != null, "authentication", "GOCORTEX_UNMODELLED"),
+    xdm.event.tags = if(
+        _event != null,
+        arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS),
+        null),
+    xdm.event.original_event_type = coalesce(_event, "GOCORTEX_UNMODELLED"),
     xdm.event.operation = if(
         _factor != null and _factor != "PASSWORD", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
         _event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
     xdm.event.outcome = if(
         _result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
         _result != null, XDM_CONST.OUTCOME_FAILED),
-    xdm.auth.service = "IDP",
+    xdm.auth.service = "SSO",
     xdm.source.user.upn = _upn,
     xdm.source.user.identity_type = if(
         _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
@@ -98,7 +101,7 @@ filter
     xdm.source.user.user_type = if(
         _upn = null, XDM_CONST.USER_TYPE_REGULAR,
         _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_]|service|gserviceaccount",
+        lowercase(_upn) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src_ip,
@@ -117,6 +120,10 @@ filter
     xdm.target.resource.name = _app_name,
     xdm.session_context_id = _session
 ;
+// REVIEW UNMODELLED -- list records this rule could not classify:
+//   datamodel dataset = okta_systemlog_json_raw
+//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
+//   | fields xdm.event.original_event_type, okta_systemlog_json_raw._raw_log
 ```
 
 ## Format 2 -- RFC 5424 syslog (`okta_systemlog_syslog_raw`)
@@ -160,16 +167,19 @@ alter
 | alter
     xdm.observer.vendor = "Okta",
     xdm.observer.product = "Identity Cloud",
-    xdm.event.type = if(_event != null, "authentication", ""),
-    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-    xdm.event.original_event_type = _event,
+    xdm.event.type = if(_event != null, "authentication", "GOCORTEX_UNMODELLED"),
+    xdm.event.tags = if(
+        _event != null,
+        arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS),
+        null),
+    xdm.event.original_event_type = coalesce(_event, "GOCORTEX_UNMODELLED"),
     xdm.event.operation = if(
         _factor != null and _factor != "PASSWORD", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
         _event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
     xdm.event.outcome = if(
         _result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
         _result != null, XDM_CONST.OUTCOME_FAILED),
-    xdm.auth.service = "IDP",
+    xdm.auth.service = "SSO",
     xdm.source.user.upn = _upn,
     xdm.source.user.identity_type = if(
         _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
@@ -177,7 +187,7 @@ alter
     xdm.source.user.user_type = if(
         _upn = null, XDM_CONST.USER_TYPE_REGULAR,
         _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_]|service|gserviceaccount",
+        lowercase(_upn) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.ipv4 = _src_ip,
@@ -195,6 +205,10 @@ alter
     xdm.target.resource.name = _app_name,
     xdm.session_context_id = _session
 ;
+// REVIEW UNMODELLED -- list records this rule could not classify:
+//   datamodel dataset = okta_systemlog_syslog_raw
+//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
+//   | fields xdm.event.original_event_type, okta_systemlog_syslog_raw._raw_log
 ```
 
 ## Key decisions called out
@@ -203,5 +217,6 @@ alter
 - All 14 mandatory fields are mapped in both rules, so the authentication story is created from either feed. WARN-042 stays silent on both because nothing mandatory is missing. This includes the two `xdm.source.user` account-class fields: `identity_type` (`IDENTITY_TYPE_USER` for a real principal) and `user_type` (defaulting to `USER_TYPE_REGULAR`, with the `$` / `svc_` / `service` conventions catching machine and service accounts).
 - Placeholders are real, not omissions. Okta logs no source port and no target IP / port, so `xdm.source.port` and `xdm.target.port` take `to_integer(0)` and `xdm.target.ipv4` takes the empty string `""`. Per [authentication-mapping.md](../authentication-mapping.md), a mandatory field must be present even when the source has no value -- dropping it would drop the event from the story.
 - `xdm.source.user.upn`, not `username`. The mandatory correlation key is the UPN (`actor.alternateId`). The human-readable `actor.displayName` is mapped to the optional `xdm.source.user.username`; the two are never substituted for each other.
-- `xdm.event.type` contains `authentication`. The story keys on this substring, not on a `"AUTH"` category label. The classifier guards on `_event != null` so a malformed row resolves to the empty string rather than a false-positive auth event.
-- `xdm.event.operation` follows the credential type. `PASSWORD` maps to `OPERATION_TYPE_AUTH_LOGIN`; any other credential type (a second factor) maps to `OPERATION_TYPE_AUTH_MFA`. `xdm.auth.service = "IDP"` because Okta is validating the credential here.
+- `xdm.event.type` contains `authentication`. The story keys on this substring, not on a `"AUTH"` category label. The classifier guards on `_event != null`; a malformed row resolves to the `"GOCORTEX_UNMODELLED"` sentinel (with blank tags) rather than a false-positive auth event, and is discoverable via the REVIEW UNMODELLED query.
+- Tags are per record and multi-valued. A recognised login carries `arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS)` -- authentication because it is a credential validation, SAAS because Okta is a SaaS identity provider -- from the closed six-member `EVENT_TAG` enum. An unrecognised record's tag if-chain ends with `null`, so it stays blank.
+- `xdm.event.operation` follows the credential type. `PASSWORD` maps to `OPERATION_TYPE_AUTH_LOGIN`; any other credential type (a second factor) maps to `OPERATION_TYPE_AUTH_MFA`. `xdm.auth.service = "SSO"` is the authentication service name -- Okta is an SSO service. (It is the service NAME, not an "SP"/"IDP" role; those values do not exist in XDM.)

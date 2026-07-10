@@ -12,16 +12,20 @@ message catalogue). Dataset: `cisco_tacacs_raw`, RFC 3164 syslog.
 
 What this walkthrough shows: an AAA gateway emits MANY event shapes from
 one daemon family -- structured key=value, legacy freeform prose, and
-pure diagnostic chatter -- and one MODEL rule can normalise all of them
-through a single shared assignment stage. It applies the AAA topology
-and vocabulary rules from
+pure diagnostic chatter -- and one MODEL rule normalises all of them
+through a single shared assignment stage while classifying PER RECORD.
+It applies the AAA topology and vocabulary rules from
 [authentication-mapping.md](../authentication-mapping.md) (AAA gateways
 section), the Stage 0 envelope from
-[syslog-envelope.md](../syslog-envelope.md), and the full 12-field
-authentication mandatory set. PERMIT / DENY here is the AUTHENTICATION
-outcome, not a network action, so the rule carries
-`EVENT_TAG_AUTHENTICATION` only -- no network tag, because these
-records hold no transport flow.
+[syslog-envelope.md](../syslog-envelope.md), the full 14-field
+authentication mandatory set, and the record-level classification and
+catch-all from
+[record-classification.md](../record-classification.md). Not every
+record is authentication: the login, authorization and session shapes
+carry `EVENT_TAG_AUTHENTICATION` (no network tag -- these hold no
+transport flow), a command-accounting record is a PROCESS event with no
+tag, and any line the rule cannot classify gets the catch-all so the
+datamodel row count still equals the raw count.
 
 ## The shape census
 
@@ -31,21 +35,25 @@ One day of records from this daemon family falls into nine groups:
 | --- | --- | --- | --- |
 | 1 | AUTH PERMIT (structured kv) | `type=AUTHENTICATION action=PERMIT` | login success |
 | 2 | AUTH DENY (structured kv) | `type=AUTHENTICATION action=DENY` | login failure + reason |
-| 3 | Command accounting | `type=ACCOUNTING action=Stop` with `cmd=` | audit; command into operation_sub_type |
-| 4 | Session accounting Start | `type=ACCOUNTING action=Start` | audit; session lifecycle, NO outcome |
-| 5 | Session accounting Stop | `type=ACCOUNTING action=Stop`, no `cmd=` | audit; duration from elapsed_time |
-| 6 | Legacy authorization permitted | `Authorization permitted for` | audit success |
-| 7 | Legacy authorization denied | `Authorization denied for` | audit failure |
+| 3 | Command accounting | `type=ACCOUNTING action=Stop` with `cmd=` | PROCESS event; `cmd` -> `target.process.command_line`; no auth tag |
+| 4 | Session accounting Start | `type=ACCOUNTING action=Start` | auth story; session lifecycle, NO outcome |
+| 5 | Session accounting Stop | `type=ACCOUNTING action=Stop`, no `cmd=` | auth story; duration from elapsed_time |
+| 6 | Legacy authorization permitted | `Authorization permitted for` | auth story; audit success |
+| 7 | Legacy authorization denied | `Authorization denied for` | auth story; audit failure |
 | 8 | Legacy login | `Logged in Successfully` / `Login Failure` | login success / failure |
-| 9 | Diagnostic chatter | parser hooks, key errors | FILTERED OUT -- no security value |
+| 9 | Diagnostic chatter | parser hooks, key errors | CATCH-ALL: `original_event_type = "GOCORTEX_UNMODELLED"`, blank tags |
 
 Two structural decisions follow:
 
-- Filter first. The second `filter` stage keeps the eight event shapes
-  in by their discriminators and drops group 9 entirely. Without it,
-  every chatter line would produce a near-empty XDM row.
-- One pipeline, shared drain. The three shape families converge on the
-  same identities (`coalesce()` over the per-shape temps) and the same
+- Never drop a record. The only filter is `_raw_log != null`; there is
+  no discriminator filter. Every record produces a row, so a
+  `datamodel` search returns the same count as the raw dataset. The
+  classification `if()`-chains recognise each shape by its own
+  discriminator and let the diagnostic chatter fall through to the
+  catch-all (`xdm.event.original_event_type = "GOCORTEX_UNMODELLED"`,
+  blank tags) rather than being discarded.
+- One pipeline, shared drain. The shape families converge on the same
+  identities (`coalesce()` over the per-shape temps) and the same
   assignment stage, so nothing drifts between duplicated drains. The
   alternative -- one `;`-terminated pipeline per family inside the one
   MODEL block -- is equally valid and better when the shapes share
@@ -57,7 +65,9 @@ Three parties, not two. The principal (`user=`) is the source; the
 principal's workstation (`src_ip=`) is the source address; the network
 device being accessed (`dvc_ip=` / `at <ip>`) is the target; and the
 AAA server that validates the request is the observer (its name comes
-from the Stage 0 envelope host) with `xdm.auth.service = "IDP"`.
+from the Stage 0 envelope host). `xdm.auth.service = "TACACS+"` is the
+authentication service name -- the AAA protocol itself (it is the
+service NAME, not an "SP"/"IDP" role; those values do not exist in XDM).
 
 TACACS+ principals (`svc_nms1`, `alice.admin`) are not UPN-shaped,
 but `xdm.source.user.upn` is the mandatory correlation key and cannot
@@ -70,13 +80,6 @@ be empty: map the raw principal to it anyway, mirrored into
 [MODEL: dataset = cisco_tacacs_raw]
 filter
     _raw_log != null
-| filter
-    _raw_log contains "type=AUTHENTICATION"
-    or _raw_log contains "type=ACCOUNTING"
-    or _raw_log contains "Authorization permitted"
-    or _raw_log contains "Authorization denied"
-    or _raw_log contains "Logged in Successfully"
-    or _raw_log contains "Login Failure"
 | alter
     _pri        = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
     _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
@@ -130,17 +133,23 @@ filter
     xdm.observer.product = "Secure ACS TACACS+",
     xdm.observer.name = _syslog_host,
     xdm.event.log_level = _pri_log_level,
-    xdm.event.type = "authentication",
-    xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-    xdm.event.original_event_type = _oet,
+    xdm.event.type = if(
+        _kv_cmd != null, "process",
+        _oet != null, "authentication",
+        "GOCORTEX_UNMODELLED"),
+    xdm.event.tags = if(
+        _kv_cmd != null, null,
+        _oet != null, arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
+        null),
+    xdm.event.original_event_type = coalesce(_oet, "GOCORTEX_UNMODELLED"),
     xdm.event.operation = if(
         _kv_type = "ACCOUNTING", XDM_CONST.OPERATION_TYPE_AUDIT,
         _az_result != null, XDM_CONST.OPERATION_TYPE_AUDIT,
-        XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
+        _oet != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
     xdm.event.operation_sub_type = if(
-        _kv_cmd != null, _kv_cmd,
         _kv_type = "AUTHENTICATION", "password",
         _lg_result != null, "password"),
+    xdm.target.process.command_line = _kv_cmd,
     xdm.event.outcome = if(
         _outcome_token = "PERMIT", XDM_CONST.OUTCOME_SUCCESS,
         _outcome_token = "permitted", XDM_CONST.OUTCOME_SUCCESS,
@@ -154,7 +163,7 @@ filter
         _kv_reason != null, _kv_reason),
     xdm.event.duration = to_integer(multiply(to_number(_kv_elapsed), 1000)),
     xdm.event.description = concat("TACACS+ ", _oet, " for ", _user),
-    xdm.auth.service = "IDP",
+    xdm.auth.service = "TACACS+",
     xdm.auth.privilege_level = if(
         _kv_priv = "15", XDM_CONST.PRIVILEGE_LEVEL_ADMIN,
         _kv_priv != null, XDM_CONST.PRIVILEGE_LEVEL_USER),
@@ -167,7 +176,7 @@ filter
     xdm.source.user.user_type = if(
         _user = null, XDM_CONST.USER_TYPE_REGULAR,
         _user contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_user) ~= "^svc[-_]|service|gserviceaccount",
+        lowercase(_user) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.source.user.username = _user,
@@ -180,23 +189,36 @@ filter
     xdm.network.session_id = _kv_task,
     xdm.network.rule = _kv_rule
 ;
+// REVIEW UNMODELLED -- list records this rule could not classify and
+// grow it to cover them:
+//   datamodel dataset = cisco_tacacs_raw
+//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
+//   | fields xdm.event.original_event_type, cisco_tacacs_raw._raw_log
 ```
 
 ## Key decisions worth copying
 
-- Chatter is filtered by DISCRIMINATOR, not by guessing: only lines
-  carrying one of the eight event-shape markers survive. The
-  Inconsistent-lengths / PostSearchHook / createreturnattrs lines never
-  reach the drain.
+- Classify per record, never drop. The `xdm.event.type` / `xdm.event.tags`
+  if-chains recognise each shape by its own discriminator: a
+  command-accounting record (`_kv_cmd` present) is a PROCESS event with no
+  tag, the login / authorization / session shapes (`_oet` present) are the
+  authentication story, and everything else -- the Inconsistent-lengths /
+  PostSearchHook / createreturnattrs chatter -- falls through to the
+  catch-all (`xdm.event.original_event_type = "GOCORTEX_UNMODELLED"`, blank
+  tags). Nothing is filtered out, so the datamodel row count matches raw.
+- Command accounting is a command execution, not authentication: the
+  executed `cmd=` goes to `xdm.target.process.command_line` with
+  `xdm.event.type = "process"`, `operation OPERATION_TYPE_AUDIT` and no
+  outcome, and NO `EVENT_TAG_AUTHENTICATION`.
 - Outcome only on conclusive events. PERMIT / permitted / Logged in
   Successfully -> `OUTCOME_SUCCESS`; DENY / denied / Login Failure ->
   `OUTCOME_FAILED`; accounting Start / Stop is session lifecycle and
   the if-chain deliberately has no default, so outcome stays null there.
 - `xdm.event.operation` splits AUTH_LOGIN (authentication + legacy
-  login) from AUDIT (authorization + accounting). The auth method is
-  `"password"` on the login shapes; command accounting carries the
-  executed `cmd=` in `xdm.event.operation_sub_type` instead (the
-  anchor-index precedent for `cmd`).
+  login) from AUDIT (command / session accounting + authorization). The
+  auth method is `"password"` on the login shapes; the final AUTH_LOGIN
+  branch is gated on `_oet != null` so unrecognised chatter gets no
+  operation.
 - Reason normalisation with passthrough: `Bad Password` ->
   `bad_credentials`, `No such user` -> `user_does_not_exist`, and
   any unrecognised vendor reason passes through unchanged rather than
@@ -239,10 +261,13 @@ NOT MAPPED
 ## Checklist
 
 ```
-[ ] chatter filtered by discriminator before any extraction
+[ ] only filter is _raw_log != null (no discriminator filter; nothing dropped)
+[ ] type/tags classified per record; chatter -> GOCORTEX_UNMODELLED catch-all
+[ ] command accounting -> event.type "process", cmd -> target.process.command_line, no auth tag
+[ ] REVIEW UNMODELLED query present with the real dataset
 [ ] Stage 0 envelope: PRI-anchored host + priority decode (WARN-040/041)
 [ ] all 14 authentication mandatory fields mapped or padded (WARN-042)
-[ ] EVENT_TAG_AUTHENTICATION only -- no network tag without a transport flow
+[ ] auth shapes carry EVENT_TAG_AUTHENTICATION only -- no network tag without a transport flow
 [ ] outcome null on accounting lifecycle rows; SUCCESS / FAILED elsewhere
 [ ] upn ALWAYS UPN-shaped: contains-@ passthrough, else concat(_user, "@localhost")
 [ ] address captures restricted to [\d.]+ (the async guard)
