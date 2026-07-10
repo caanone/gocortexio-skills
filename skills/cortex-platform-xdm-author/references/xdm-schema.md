@@ -492,7 +492,7 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.network.icmp -- String
   xdm.network.icmp.code -- Number
   xdm.network.icmp.type -- Number
-  xdm.network.protocol_layers -- String
+  xdm.network.protocol_layers -- String (Array)
   xdm.network.vpn -- String
   xdm.network.vpn.allocated_ipv4 -- IPv4
   xdm.network.vpn.allocated_ipv6 -- IPv6
@@ -540,13 +540,13 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.alert -- String
   xdm.alert.category -- XDM_CONST.THREAT_CATEGORY
   xdm.alert.description -- String
-  xdm.alert.mitre_tactics -- XDM_CONST.MITRE_TACTIC
-  xdm.alert.mitre_techniques -- XDM_CONST.MITRE_TECHNIQUE
+  xdm.alert.mitre_tactics -- XDM_CONST.MITRE_TACTIC (Array)
+  xdm.alert.mitre_techniques -- XDM_CONST.MITRE_TECHNIQUE (Array)
   xdm.alert.name -- String
   xdm.alert.original_alert_id -- String
   xdm.alert.original_threat_id -- String
   xdm.alert.original_threat_name -- String
-  xdm.alert.risks -- String
+  xdm.alert.risks -- String (Array)
   xdm.alert.severity -- String
   xdm.alert.source_url -- URL
   xdm.alert.status -- XDM_CONST.ALERT_STATUS
@@ -600,7 +600,7 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.auth.ntlm.version -- String
   xdm.auth.service -- String
   xdm.logon -- String
-  xdm.logon.assigned_rights -- XDM_CONST.LOGON_ASSIGNED_RIGHT
+  xdm.logon.assigned_rights -- XDM_CONST.LOGON_ASSIGNED_RIGHT (Array)
   xdm.logon.fingerprint -- String
   xdm.logon.impersonation_level -- XDM_CONST.LOGON_IMPERSONATION_LEVEL
   xdm.logon.is_elevated -- Boolean
@@ -618,7 +618,7 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.database.response_time -- Number
   xdm.database.schema -- String
   xdm.database.statement -- String
-  xdm.database.tables -- String
+  xdm.database.tables -- String (Array)
   xdm.email -- String
   xdm.email.attachment -- String
   xdm.email.attachment.directory -- String
@@ -632,8 +632,8 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.email.attachment.signature_status -- XDM_CONST.SIGNATURE_STATUS
   xdm.email.attachment.signer -- String
   xdm.email.attachment.size -- Number
-  xdm.email.bcc -- EmailAddress
-  xdm.email.cc -- EmailAddress
+  xdm.email.bcc -- EmailAddress (Array)
+  xdm.email.cc -- EmailAddress (Array)
   xdm.email.data -- String
   xdm.email.delivery_timestamp -- Timestamp
   xdm.email.message_id -- String

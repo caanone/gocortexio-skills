@@ -53,6 +53,25 @@ class TestPathLoader(unittest.TestCase):
         # arraycreate(); the loader forces the flag.
         self.assertTrue(x.xdm_path_is_array("xdm.email.recipients"))
 
+    def test_leaf_array_dataclass_fields(self):
+        # Regression: these leaf fields are Datatype String/const but
+        # Dataclass Array in the authoritative schema. A scalar assignment
+        # is rejected by the tenant (Expected array but received string),
+        # so the schema must mark them (Array) for WARN-035 to catch it.
+        for path in (
+            "xdm.alert.risks",
+            "xdm.alert.mitre_tactics",
+            "xdm.alert.mitre_techniques",
+            "xdm.database.tables",
+            "xdm.email.bcc",
+            "xdm.email.cc",
+            "xdm.logon.assigned_rights",
+            "xdm.network.protocol_layers",
+        ):
+            self.assertTrue(
+                x.xdm_path_is_array(path), f"{path} must be Array-typed"
+            )
+
     def test_path_existence_helpers(self):
         self.assertTrue(x.xdm_path_exists("xdm.source.ipv4"))
         self.assertFalse(x.xdm_path_exists("xdm.event.start_time"))
