@@ -54,9 +54,11 @@ XDM_CONST.MITRE_TACTIC_RECONNAISSANCE
 XDM_CONST.MITRE_TACTIC_RESOURCE_DEVELOPMENT
 ```
 
-## MITRE technique (top-level -- 68 constants)
+## MITRE technique (top-level -- readable subset)
 
-Closed list. If the vendor log does not contain values that map deterministically to one of these, OMIT `xdm.alert.mitre_techniques` entirely. Only map MITRE when the vendor provides explicit labels (e.g. `risk_reason`, `attack_type`, `technique_id`) that correspond to a constant below.
+The constants below are a readable subset. The FULL authoritative enum (the complete ATT&CK T-code -> constant crosswalk plus the 14-tactic keyword table) ships as [../assets/mitre_crosswalk.json](../assets/mitre_crosswalk.json); `scripts/mitre_map.py` resolves against it and the const loader validates against it, so any documented technique constant is accepted. See [mitre-mapping.md](mitre-mapping.md).
+
+Closed list. If the vendor log does not contain values that map deterministically to a constant, OMIT `xdm.alert.mitre_techniques` entirely. Only map MITRE when the vendor provides explicit labels (e.g. `risk_reason`, `attack_type`, `technique_id`) that correspond to a constant.
 
 ```
 XDM_CONST.MITRE_TECHNIQUE_ACCOUNT_DISCOVERY

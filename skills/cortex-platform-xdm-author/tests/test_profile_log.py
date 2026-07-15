@@ -727,5 +727,122 @@ class TestClassificationBlock(unittest.TestCase):
         self.assertIn("families_detected", ws["classification"])
 
 
+class TestMitreDetection(unittest.TestCase):
+    """The profiler flags a MITRE reference by field name or ATT&CK-id
+    value, and does not false-fire on a benign log."""
+
+    def test_detects_name_and_value(self) -> None:
+        ws = profile(
+            "a.jsonl",
+            '{"alert":"phish","mitre_technique":"T1566","category":"Initial Access"}\n',
+        )
+        m = ws["mitre"]
+        self.assertTrue(m["detected"], m)
+        kinds = {(s["field"], s["kind"]) for s in m["signals"]}
+        self.assertIn(("mitre_technique", "name"), kinds)
+        self.assertIn(("mitre_technique", "value"), kinds)
+        self.assertIn("xdm.alert.mitre_techniques", m["target_fields"])
+
+    def test_no_false_fire(self) -> None:
+        ws = profile("b.jsonl", '{"src_ip":"1.1.1.1","bytes":5}\n')
+        self.assertFalse(ws["mitre"]["detected"], ws["mitre"])
+
+
+class TestCiscoCatalyst(unittest.TestCase):
+    """Cisco IOS/IOS-XE Catalyst syslog: SEC_LOGIN success/failure lines
+    (auth) mixed with LINK/SYS events profile as authentication."""
+
+    def test_sec_login_detected(self) -> None:
+        ws = _profile_fixture("cisco_catalyst_syslog.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        self.assertTrue(ws["authentication"]["detected"], ws["authentication"])
+
+
+class TestCiscoWlc(unittest.TestCase):
+    """Cisco WLC AireOS security syslog (AAA Authentication Failure for
+    UserName, 802.1X/DOT1X) profiles as authentication."""
+
+    def test_aireos_auth_detected(self) -> None:
+        ws = _profile_fixture("cisco_wlc_syslog.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        self.assertTrue(ws["authentication"]["detected"], ws["authentication"])
+
+    def test_relay_prepend_advisory_detected(self) -> None:
+        # The fixture carries a relay-wrapped WLC line (device restated its
+        # timestamp) and a double-<PRI> relayed line; the advisory fires.
+        ws = _profile_fixture("cisco_wlc_syslog.log")
+        relay = ws["syslog_relay"]
+        self.assertTrue(relay["detected"], relay)
+        kinds = {s["kind"] for s in relay["signals"]}
+        self.assertTrue(
+            {"double-pri", "wrapped-device-message"} & kinds, relay
+        )
+
+
+class TestSyslogRelayAdvisory(unittest.TestCase):
+    """detect_syslog_relay flags a prepend shape (double <PRI> or a
+    transport header in front of a device that restates its timestamp) and
+    stays silent on a direct single-header line."""
+
+    def test_direct_single_header_not_flagged(self) -> None:
+        line = "<190>Jun 30 12:00:04 sw1 %SEC_LOGIN-5-LOGIN_SUCCESS: ok"
+        self.assertFalse(_pl.detect_syslog_relay(line)["detected"])
+
+    def test_double_pri_flagged(self) -> None:
+        line = ("<190>Jun 30 12:00:10 relay01 "
+                "<134>Jun 30 12:00:04 originhost app: msg")
+        out = _pl.detect_syslog_relay(line)
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["signals"][0]["kind"], "double-pri")
+
+    def test_wrapped_device_message_flagged(self) -> None:
+        line = ("<134>Jul 14 15:41:24 relay.example.net wlc01: *task: "
+                "Jul 14 15:41:24.640: %APF-6-USER_NAME_CREATED: ...")
+        out = _pl.detect_syslog_relay(line)
+        self.assertTrue(out["detected"])
+        self.assertEqual(out["signals"][0]["kind"], "wrapped-device-message")
+
+
+class TestHpeSwitch(unittest.TestCase):
+    """HPE ArubaOS-Switch event log (Event 3362: User <name> logged in
+    from <ip> to SSH/WebUI/Console session) profiles as authentication."""
+
+    def test_aos_switch_login_detected(self) -> None:
+        ws = _profile_fixture("hpe_switch_syslog.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        self.assertTrue(ws["authentication"]["detected"], ws["authentication"])
+
+
+class TestHuaweiVrp(unittest.TestCase):
+    """Huawei VRP router syslog: SSH/AAA login lines are authentication and
+    the SHELL CMDRECORD line is a command record, so the sample is
+    multi-kind (authentication + process)."""
+
+    def test_vrp_multi_kind(self) -> None:
+        ws = _profile_fixture("huawei_rt_syslog.log")
+        self.assertIn(ws["detected_format"], ("syslog-3164", "syslog-5424"))
+        self.assertTrue(ws["authentication"]["detected"], ws["authentication"])
+        fams = ws["classification"]["families_detected"]
+        self.assertIn("authentication", fams)
+        self.assertIn("process", fams)
+
+
+class TestCelonisAudit(unittest.TestCase):
+    """Celonis Audit Log API events (userId / userRole / event / ipAddress)
+    profile as authentication, and the distinctive userRole field resolves
+    to xdm.source.user.roles (added from the authoritative audit spec)."""
+
+    def test_celonis_audit_is_authentication(self) -> None:
+        ws = _profile_fixture("celonis_audit.jsonl")
+        self.assertTrue(ws["authentication"]["detected"], ws["authentication"])
+
+    def test_userrole_resolves_to_roles(self) -> None:
+        ws = _profile_fixture("celonis_audit.jsonl")
+        cand = {}
+        for f in ws["fields"]:
+            cand[f["path"]] = [c["xdm_path"] for c in (f.get("xdm_candidates") or [])]
+        self.assertIn("xdm.source.user.roles", cand.get("userRole", []))
+
+
 if __name__ == "__main__":
     unittest.main()

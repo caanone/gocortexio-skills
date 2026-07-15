@@ -139,5 +139,60 @@ class TestCli(unittest.TestCase):
         self.assertEqual(cp.returncode, 1)
 
 
+class TestCrosswalkAndFuzzy(unittest.TestCase):
+    """The full authoritative crosswalk resolves, and the fuzzy tactic
+    emitter is a genuine multi-match into the array."""
+
+    def test_crosswalk_full_and_valid(self):
+        cw = _m._CROSSWALK
+        self.assertGreaterEqual(len(cw.get("techniques", {})), 500)
+        self.assertEqual(len(cw.get("tactics", {})), 14)
+        self.assertEqual(len(cw.get("tactic_keywords", {})), 14)
+        # Every crosswalk constant must be accepted by the const loader.
+        known = _schema.all_consts()
+        for suffix in cw["techniques"].values():
+            self.assertIn(f"XDM_CONST.{suffix}", known, suffix)
+        for suffix in cw["tactics"].values():
+            self.assertIn(f"XDM_CONST.{suffix}", known, suffix)
+
+    def test_noncurated_id_resolves(self):
+        pairs, unmapped = _m.resolve_ids("technique", ["T1220"])
+        self.assertEqual(
+            [c for _, c in pairs],
+            ["XDM_CONST.MITRE_TECHNIQUE_XSL_SCRIPT_PROCESSING"],
+        )
+        self.assertEqual(unmapped, [])
+
+    def test_fuzzy_multi_match_into_array(self):
+        verify = _load("verify_rule")
+        chain = _m.render_fuzzy_tactics("xdm.alert.mitre_tactics", "_category")
+        rule = (
+            "[MODEL: dataset=acme_demo_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    _category = json_extract_scalar(_raw_log, "$.category")\n'
+            "| alter\n"
+            '    xdm.observer.vendor = "Acme",\n'
+            '    xdm.event.type = "alert",\n'
+            f"    {chain}\n"
+            ";\n"
+        )
+        both = verify.evaluate_rule(
+            rule, {"category": "Credential Access then Lateral Movement"}
+        )
+        self.assertEqual(
+            both["xdm.alert.mitre_tactics"],
+            [
+                "XDM_CONST.MITRE_TACTIC_CREDENTIAL_ACCESS",
+                "XDM_CONST.MITRE_TACTIC_LATERAL_MOVEMENT",
+            ],
+        )
+        none = verify.evaluate_rule(rule, {"category": "benign sign-in"})
+        self.assertEqual(none["xdm.alert.mitre_tactics"], [])
+        # And it lints clean.
+        errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
+        self.assertEqual(errors, [], errors)
+
+
 if __name__ == "__main__":
     unittest.main()

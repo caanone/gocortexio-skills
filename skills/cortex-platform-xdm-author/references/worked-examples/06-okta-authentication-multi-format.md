@@ -124,6 +124,9 @@ filter
 //   datamodel dataset = okta_systemlog_json_raw
 //   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
 //   | fields xdm.event.original_event_type, okta_systemlog_json_raw._raw_log
+//
+// RAISE SKILL ISSUES -- report a mis-mapping (include the REVIEW
+// UNMODELLED output above): https://github.com/gocortexio/skills/issues
 ```
 
 ## Format 2 -- RFC 5424 syslog (`okta_systemlog_syslog_raw`)
@@ -209,6 +212,9 @@ alter
 //   datamodel dataset = okta_systemlog_syslog_raw
 //   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
 //   | fields xdm.event.original_event_type, okta_systemlog_syslog_raw._raw_log
+//
+// RAISE SKILL ISSUES -- report a mis-mapping (include the REVIEW
+// UNMODELLED output above): https://github.com/gocortexio/skills/issues
 ```
 
 ## Key decisions called out

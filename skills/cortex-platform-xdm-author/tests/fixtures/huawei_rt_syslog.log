@@ -1,0 +1,3 @@
+<190>Jun 30 11:59:00 rtr1 %%01SHELL/6/CMDRECORD(s)[40426]:Recorded command information. (Task=vty0, Ip=10.0.0.5, User=admin, Command="display current-configuration")
+<190>Jun 30 12:00:04 rtr1 %%01SSH/4/SSH_FAIL(l):Failed to login through SSH. (UserName=admin, IPAddress=10.0.0.5)
+<189>Jun 30 12:00:30 rtr1 %%01AAA/5/LOGIN(l):The user login. (UserName=ops, IPAddress=10.0.0.7)

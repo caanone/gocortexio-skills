@@ -1,8 +1,16 @@
 // SPDX-FileCopyrightText: GoCortexIO
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// (SPDX header at the top is for this template file itself; the SPDX
-// lines further down belong to the rule the agent emits when it uses
-// this template.)
+//
+// Canonical comment order for every emitted rule: (1) SPDX licence at the
+// very TOP, (2) provenance block, (3) identity + description, (4) field
+// mapping + NOT MAPPED, (5) REVIEW UNMODELLED, (6) RAISE SKILL ISSUES --
+// then the [MODEL: ...] body. Keep this order for predictability.
+//
+// Generated via
+// GOCORTEX_SKILLS_MODEL="<model id>"
+// GOCORTEX_SKILLS_SKILL_NAME="cortex-platform-xdm-author"
+// GOCORTEX_SKILLS_SKILL_VERSION="1.8.0-beta.1"
+// GOCORTEX_SKILLS_SKILL_WARNING_COUNT="<lint warning count>"
 //
 // <Vendor> <Product> -- XDM Data Model Rule
 // Dataset: <vendor>_<product>_raw
@@ -57,8 +65,15 @@
 //   _time                 -- Cortex sets _time automatically in MODEL rules
 //   xdm.alert.mitre_techniques -- (only if _gc_raw dataset) WARN-023 blocking on _gc_raw; mitre_tactics only
 //
-// SPDX-FileCopyrightText: GoCortexIO
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// REVIEW UNMODELLED -- after deploying, list what this rule could not
+// classify, and grow it to cover those records:
+//   datamodel dataset = <vendor>_<product>_raw
+//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
+//   | fields xdm.event.original_event_type, <vendor>_<product>_raw._raw_log
+//
+// RAISE SKILL ISSUES -- if this rule mis-modelled something, please open
+// an issue and include the REVIEW UNMODELLED output above:
+//   https://github.com/gocortexio/skills/issues
 
 [MODEL: dataset=<vendor>_<product>_raw]
 filter

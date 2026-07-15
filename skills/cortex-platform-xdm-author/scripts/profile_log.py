@@ -1248,6 +1248,97 @@ def classify(auth_block: dict, network_block: dict, process_block: dict) -> dict
     }
 
 
+# A field whose NAME references MITRE, or a value shaped like an ATT&CK id
+# (T#### / T####.### / TA####), signals a MITRE reference in the log.
+_MITRE_NAME_RE = re.compile(r"mitre|att.?ck|technique|tactic|\bttp\b", re.IGNORECASE)
+_MITRE_VALUE_RE = re.compile(r"(?<![A-Za-z0-9])TA?\d{4}(?:\.\d+)?(?![0-9])")
+
+
+def detect_mitre(fields: Dict[str, dict], records: List[dict]) -> dict:
+    """Flag a MITRE ATT&CK reference in the log: a field NAME carrying
+    mitre / att&ck / technique / tactic / ttp, or a value shaped like an
+    ATT&CK id (T#### / TA####). Enrichment, not a record kind -- reports
+    the target array fields and how to map. See references/mitre-mapping.md."""
+    signals: List[dict] = []
+    seen: set = set()
+    for path, meta in fields.items():
+        if _MITRE_NAME_RE.search(path) and ("name", path) not in seen:
+            signals.append({"field": path, "kind": "name"})
+            seen.add(("name", path))
+        sample = meta.get("sample")
+        if (
+            isinstance(sample, str)
+            and _MITRE_VALUE_RE.search(sample)
+            and ("value", path) not in seen
+        ):
+            signals.append({"field": path, "kind": "value"})
+            seen.add(("value", path))
+    out: dict = {"detected": bool(signals), "signals": signals[:12]}
+    if signals:
+        out["target_fields"] = [
+            "xdm.alert.mitre_techniques",
+            "xdm.alert.mitre_tactics",
+        ]
+        out["guidance"] = (
+            "MITRE ATT&CK reference detected (both target fields are Arrays). "
+            "For explicit ids/names: scripts/mitre_map.py --kind technique "
+            "--ids T1078,... (full crosswalk in assets/mitre_crosswalk.json, "
+            "unresolved ids omitted). For a category / name / description "
+            "field carrying tactic words: scripts/mitre_map.py --fuzzy-tactics "
+            "--temp <column> emits a high-confidence keyword chain that "
+            "collects EVERY matched tactic into xdm.alert.mitre_tactics. See "
+            "references/mitre-mapping.md."
+        )
+    return out
+
+
+# --------------------------------------------------------------------
+# Relay / prepend advisory
+# --------------------------------------------------------------------
+#
+# An intermediate syslog server prepends its own header to the payload, so
+# a source arrives both direct and relay-wrapped. Two strong, low-false-
+# positive signatures: a second <PRI> token (the relay wraps the whole
+# original line), or a second RFC-3164 timestamp (the transport header plus
+# a device that restates its own clock, e.g. Cisco WLC). A direct single-
+# header line -- one <PRI>, one timestamp -- never matches, so normal Cisco
+# syslog is not flagged. Advisory only: it points the author at the
+# relay-aware Stage 0 and the token-anchoring hard rule (WARN-047); it does
+# not change detected_format or classification.
+_DOUBLE_PRI_RE = re.compile(r"<\d{1,3}>.*<\d{1,3}>")
+_TS_3164 = r"[A-Za-z]{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}"
+_DOUBLE_TS_RE = re.compile(_TS_3164 + r".*" + _TS_3164)
+
+
+def detect_syslog_relay(text: str) -> dict:
+    """Flag lines that show an intermediate-relay prepend (double <PRI> or a
+    transport header in front of a device that restates its timestamp).
+    Advisory; feeds the relay-aware Stage 0 + WARN-047 guidance."""
+    signals: List[dict] = []
+    for ln in _non_blank_lines(text):
+        s = ln.strip()
+        if _DOUBLE_PRI_RE.search(s):
+            kind = "double-pri"
+        elif _DOUBLE_TS_RE.search(s):
+            kind = "wrapped-device-message"
+        else:
+            continue
+        signals.append({"kind": kind, "sample": s[:80]})
+    out: dict = {"detected": bool(signals), "signal_count": len(signals),
+                 "signals": signals[:5]}
+    if signals:
+        out["guidance"] = (
+            "Relay/prepend shape detected: an intermediate syslog server has "
+            "prepended its own header. Capture the envelope relay-aware (the "
+            "Stage 0 greedy ^.* prefix takes the origin host/PRI) and anchor "
+            "every payload field on its own token, never on ^ -- so extraction "
+            "is identical whether the record arrives direct or prepended. See "
+            "references/syslog-envelope.md (HARD RULE); WARN-047 flags "
+            "^-anchored body captures."
+        )
+    return out
+
+
 def profile(source_path: str, text: str) -> dict:
     fmt = detect_format(text)
     try:
@@ -1274,6 +1365,8 @@ def profile(source_path: str, text: str) -> dict:
         "authentication": auth_block,
         "network": network_block,
         "process": process_block,
+        "mitre": detect_mitre(fields, records),
+        "syslog_relay": detect_syslog_relay(text),
         "fields": list(fields.values()),
         "object_arrays": arrays,
     }
@@ -1346,6 +1439,23 @@ def _format_text(worksheet: dict) -> str:
             "  map the process family (advisory WARN-044): "
             + ", ".join(proc.get("recommended_fields", []))
         )
+    mitre = worksheet.get("mitre") or {}
+    if mitre.get("detected"):
+        sigs = mitre.get("signals", [])
+        shown = ", ".join(f"{s['field']}({s['kind']})" for s in sigs[:5])
+        lines.append("")
+        lines.append("mitre att&ck:")
+        lines.append(f"  detected -- {len(sigs)} signal(s): {shown}")
+        lines.append("  " + mitre.get("guidance", ""))
+    relay = worksheet.get("syslog_relay") or {}
+    if relay.get("detected"):
+        lines.append("")
+        lines.append("syslog relay / prepend:")
+        lines.append(
+            f"  detected -- {relay.get('signal_count', 0)} line(s) show a "
+            "prepended header"
+        )
+        lines.append("  " + relay.get("guidance", ""))
     clf = worksheet.get("classification") or {}
     if clf:
         lines.append("")

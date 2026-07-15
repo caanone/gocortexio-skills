@@ -47,6 +47,15 @@ Schema-aware checks (XDM schema + XDM_CONST loaded from references):
              authentication-story mandatory set (advisory, never blocks).
     WARN-043 Auto-detected network event missing a field from the
              network-story mandatory set (advisory, never blocks).
+    WARN-044 Process / command-execution event mapping the executable to a
+             parent-process field (advisory).
+    WARN-045 xdm.event.tags assigned a value outside the closed six-member
+             EVENT_TAG enum (advisory).
+    WARN-046 Record-dropping content filter with no GOCORTEX_UNMODELLED
+             catch-all sentinel (advisory).
+    WARN-047 Prepend-fragile syslog extraction: a body field captured with
+             a ^-anchored / positional regex instead of a payload token, so
+             it misses the direct or relay-prepended arrival form (advisory).
     INFO-013 Advisory: one underscore temp mapped across 3+ XDM entity
              families (likely over-mapping; event / observer excluded).
 
@@ -1754,8 +1763,22 @@ _SYSLOG_HDR_SIG = re.compile(
 )
 
 # The PRI-capturing regextract is the only canonical pattern that opens a
-# capture group immediately after the priority token: ^<(\d{1,3})>.
+# capture group immediately after the priority token: ^<(\d{1,3})>. The
+# relay-aware variant skips a prepended relay/transport header with a
+# greedy prefix and captures the innermost origin PRI: ^.*<(\d{1,3})>...
 _PRI_CAPTURE_PREFIX = "^<("
+_PRI_CAPTURE_PREFIX_RELAY = "^.*<("
+
+# A syslog envelope capture opens either on the priority token (^<...) or
+# behind a greedy relay-prefix (^.*...) that absorbs any prepended
+# relay/transport header. Either way it is prepend-robust, so it must never
+# be flagged as vendor-anchored (WARN-040) or prepend-fragile (WARN-047).
+_ENVELOPE_ANCHOR_RE = re.compile(r"^\^(?:<|\.\*)")
+
+# A greedy rest-of-line capture group -- (.*), (.+), (.*?) etc. Combined
+# with a ^ anchor this is the "everything after the header" body grab that
+# breaks the moment the header is absent (direct) or duplicated (relayed).
+_GREEDY_REST_RE = re.compile(r"\(\.[*+]\??\)")
 
 
 def _check_warn040(code_lines: List[str]) -> List[dict]:
@@ -1772,7 +1795,8 @@ def _check_warn040(code_lines: List[str]) -> List[dict]:
         cp = _strip_line_comment(raw)
         for m in _REGEXTRACT_RAW_RE.finditer(cp):
             pat = m.group(1)
-            if pat.startswith("^<"):
+            if _ENVELOPE_ANCHOR_RE.match(pat):
+                # PRI-anchored, optionally behind a greedy relay-prefix.
                 continue
             if not _SYSLOG_HDR_SIG.search(pat):
                 continue
@@ -1805,7 +1829,10 @@ def _check_warn041(code_lines: List[str]) -> List[dict]:
     for i, raw in enumerate(code_lines):
         cp = _strip_line_comment(raw)
         for m in _REGEXTRACT_RAW_RE.finditer(cp):
-            if m.group(1).startswith(_PRI_CAPTURE_PREFIX):
+            pat = m.group(1)
+            if pat.startswith(_PRI_CAPTURE_PREFIX) or pat.startswith(
+                _PRI_CAPTURE_PREFIX_RELAY
+            ):
                 pri_line = i + 1
                 break
         if pri_line is not None:
@@ -1832,6 +1859,78 @@ def _check_warn041(code_lines: List[str]) -> List[dict]:
             "_pri_sev_band) -- see references/syslog-envelope.md.",
         )
     ]
+
+
+# ----- WARN-047  prepend-fragile syslog extraction (support both forms)
+
+
+def _rule_is_syslog(code_lines: List[str]) -> bool:
+    """True when the rule parses a syslog transport: it carries a
+    PRI/envelope capture (^<... or ^.*<...) or a regextract pattern with a
+    syslog timestamp-header signature. Used to gate WARN-047 so non-syslog
+    shapes (CLF web access, CSV, JSON) are never touched."""
+    for raw in code_lines:
+        cp = _strip_line_comment(raw)
+        for m in _REGEXTRACT_RAW_RE.finditer(cp):
+            pat = m.group(1)
+            if _ENVELOPE_ANCHOR_RE.match(pat) or _SYSLOG_HDR_SIG.search(pat):
+                return True
+    return False
+
+
+def _check_warn047(code_lines: List[str]) -> List[dict]:
+    """A syslog body field extracted with a ^-anchored / positional regex.
+
+    Syslog rarely arrives byte-for-byte as the device emits it: bounced
+    through an intermediate relay the line gains a prepended
+    ``<PRI> ts host tag:`` header (sometimes two), and direct off the box
+    it may have none. A ^-anchored body capture assumes a fixed prefix, so
+    it silently misses every record whose arrival form differs from the
+    build-time sample. The hard rule for syslog: anchor each field on its
+    own payload token (position-independent regextract), and let the
+    relay-aware Stage 0 (^.*<) own the envelope. Fires only in a syslog
+    rule, and only on a ^-anchored _raw_log capture that is neither a
+    sanctioned envelope capture (^<... / ^.*<...) nor -- when it is the
+    envelope prefix -- an "everything after the header" grab ((.*)/(.+))."""
+    if not _is_model(code_lines):
+        return []
+    if not _rule_is_syslog(code_lines):
+        return []
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        for m in _REGEXTRACT_RAW_RE.finditer(cp):
+            pat = m.group(1)
+            if not pat.startswith("^"):
+                continue  # token-anchored -> position independent, fine
+            # An envelope capture is prepend-robust (^< / ^.*) or is a
+            # header field (host / tag, carries a timestamp-header
+            # signature) -- the latter is WARN-040's domain, not ours.
+            envelope = bool(
+                _ENVELOPE_ANCHOR_RE.match(pat) or _SYSLOG_HDR_SIG.search(pat)
+            )
+            greedy_rest = bool(_GREEDY_REST_RE.search(pat))
+            if envelope and not greedy_rest:
+                continue  # sanctioned host / PRI / tag envelope capture
+            out.append(
+                _violation(
+                    "WARN-047",
+                    "warning",
+                    i + 1,
+                    "Prepend-fragile syslog extraction: a body field is "
+                    "captured with a ^-anchored / positional regex (or an "
+                    "'everything after the header' grab). The same source "
+                    "arrives direct off the box and behind a relay-prepended "
+                    "<PRI> header, so a fixed-prefix anchor misses whichever "
+                    "form the build sample did not show.",
+                    "Anchor on the payload's own token instead (e.g. "
+                    "regextract(_raw_log, \"key=([^\\s]+)\") or the "
+                    "%FAC-SEV-MNEMONIC token) so extraction is identical for "
+                    "both forms; leave the envelope to the relay-aware Stage "
+                    "0 (^.*<) -- see references/syslog-envelope.md.",
+                )
+            )
+    return out
 
 
 # ----- WARN-042  authentication-story mandatory mapping (auto-detected)
@@ -2738,6 +2837,7 @@ def lint(source: str) -> List[dict]:
     findings += _check_warn044(code_lines)
     findings += _check_warn045(code_lines)
     findings += _check_warn046(code_lines)
+    findings += _check_warn047(code_lines)
     findings += _check_info013(code_lines)
 
     findings.sort(key=lambda v: (v["line"], v["rule_id"]))

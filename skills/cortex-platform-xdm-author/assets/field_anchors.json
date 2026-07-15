@@ -23457,7 +23457,7 @@
       ]
     },
     "xdm.source.user.roles": {
-      "frequency": 2,
+      "frequency": 3,
       "synonyms": [
         {
           "synonym": "details",
@@ -23470,16 +23470,27 @@
         {
           "synonym": "user",
           "count": 1
+        },
+        {
+          "synonym": "userrole",
+          "count": 1
+        },
+        {
+          "synonym": "user_role",
+          "count": 1
         }
       ],
       "synonyms_simple": [
         "details",
         "role_grants",
-        "user"
+        "user",
+        "userrole",
+        "user_role"
       ],
       "exampleVendors": [
         "cohesity",
-        "okta"
+        "okta",
+        "celonis"
       ]
     },
     "xdm.source.user.sam_account_name": {

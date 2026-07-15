@@ -158,6 +158,23 @@ class TestScaffoldSyslogStage0(unittest.TestCase):
             rule,
         )
 
+    def test_stage0_is_relay_aware(self):
+        # HARD RULE: the emitted envelope must be prepend-robust -- the RFC
+        # 3164 host and the origin PRI are captured through a greedy ^.*
+        # prefix so a relay-prepended header is skipped to the origin.
+        rule = self._rule()
+        self.assertIn(
+            '_host_3164  = arrayindex(regextract(_raw_log, '
+            '"^.*<\\d{1,3}>[A-Za-z]{3}', rule
+        )
+        # PRI is coalesce(origin-greedy, first) -- the ^<( fallback remains.
+        self.assertIn(
+            'regextract(_raw_log, "^.*<(\\d{1,3})>[A-Za-z]{3}', rule
+        )
+        self.assertIn('regextract(_raw_log, "^<(\\d{1,3})>")', rule)
+        # No WARN-047 self-flag from the relay-aware envelope captures.
+        self.assertNotIn("WARN-047", [v["rule_id"] for v in _lint.lint(rule)])
+
     def test_facility_and_severity_in_separate_alters(self):
         rule = self._rule()
         # Severity reads the facility temp, so they cannot share an alter

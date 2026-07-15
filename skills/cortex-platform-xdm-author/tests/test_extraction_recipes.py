@@ -106,7 +106,7 @@ filter
 filter
     _raw_log != null
 | alter
-    _host = arrayindex(regextract(_raw_log, "^\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+(\S+)"), 0),
+    _host = arrayindex(regextract(_raw_log, "^.*(?:<\d{1,3}>)?[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0),
     _proc = arrayindex(regextract(_raw_log, "(\w+)\[\d+\]:"), 0),
     _pid = arrayindex(regextract(_raw_log, "\[(\d+)\]:"), 0)
 | alter
@@ -135,6 +135,96 @@ filter
         {"xdm.source.ipv4": "10.0.0.5",
          "xdm.source.user.upn": "alice@corp.example.com"},
     ),
+    "sros": (
+        r'''[MODEL: dataset=vendor_sros_raw]
+filter
+    _raw_log != null
+| alter
+    _sros_event = arrayindex(regextract(_raw_log, "Base \w+-\w+-(\w+)"), 0),
+    _sros_user = arrayindex(regextract(_raw_log, "\bUser (\S+)"), 0)
+| alter
+    xdm.event.original_event_type = _sros_event,
+    xdm.source.user.username = _sros_user
+;''',
+        '<149>Jun 30 12:00:04 router1 tmnx: 470024 Base SECURITY-MAJOR-cli_user_login - User admin1 login from console',
+        {"xdm.event.original_event_type": "cli_user_login",
+         "xdm.source.user.username": "admin1"},
+    ),
+    "ios_bracket": (
+        r'''[MODEL: dataset=vendor_ios_raw]
+filter
+    _raw_log != null
+| alter
+    _ios_event = arrayindex(regextract(_raw_log, "%([\w]+-\d-\w+):"), 0),
+    _ios_user = arrayindex(regextract(_raw_log, "\[user: ?([^\]]+)\]"), 0),
+    _ios_src = arrayindex(regextract(_raw_log, "\[Source: ?(\d{1,3}(?:\.\d{1,3}){3})\]"), 0)
+| alter
+    xdm.event.original_event_type = _ios_event,
+    xdm.source.user.username = _ios_user,
+    xdm.source.ipv4 = _ios_src
+;''',
+        '<190>Jun 30 12:00:04 sw1 %SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: admin] [Source: 10.0.0.5] [localport: 22] at 12:00:04 UTC',
+        {"xdm.event.original_event_type": "SEC_LOGIN-5-LOGIN_SUCCESS",
+         "xdm.source.user.username": "admin",
+         "xdm.source.ipv4": "10.0.0.5"},
+    ),
+    "vrp_paren_kv": (
+        r'''[MODEL: dataset=vendor_vrp_raw]
+filter
+    _raw_log != null
+| alter
+    _vrp_event = arrayindex(regextract(_raw_log, "%%\d*\w+/\d/(\w+)"), 0),
+    _vrp_user = arrayindex(regextract(_raw_log, "UserName=([^,)]+)"), 0),
+    _vrp_ip = arrayindex(regextract(_raw_log, "IPAddress=([^,)]+)"), 0)
+| alter
+    xdm.event.original_event_type = _vrp_event,
+    xdm.source.user.username = _vrp_user,
+    xdm.source.ipv4 = _vrp_ip
+;''',
+        '<190>Jun 30 12:00:04 rtr1 %%01SSH/4/SSH_FAIL(l):Failed to login through SSH. (UserName=admin, IPAddress=10.0.0.5)',
+        {"xdm.event.original_event_type": "SSH_FAIL",
+         "xdm.source.user.username": "admin",
+         "xdm.source.ipv4": "10.0.0.5"},
+    ),
+    "clf": (
+        r'''[MODEL: dataset=vendor_clf_raw]
+filter
+    _raw_log != null
+| alter
+    _clf_ip = arrayindex(regextract(_raw_log, "^(\d{1,3}(?:\.\d{1,3}){3})"), 0),
+    _clf_method = arrayindex(regextract(_raw_log, "\"(\w+) \S+ HTTP/\d"), 0),
+    _clf_url = arrayindex(regextract(_raw_log, "\"\w+ (\S+) HTTP/\d"), 0),
+    _clf_ua = arrayindex(regextract(_raw_log, "\"([^\"]*)\"\s*$"), 0)
+| alter
+    xdm.source.ipv4 = _clf_ip,
+    xdm.network.http.method = _clf_method,
+    xdm.network.http.url = _clf_url,
+    xdm.source.user_agent = _clf_ua
+;''',
+        '10.0.0.5 - alice [30/Jun/2025:12:00:04 +0000] "GET /app/login HTTP/1.1" 200 1234 "https://portal.example.com/" "Mozilla/5.0 (Windows NT 10.0)"',
+        {"xdm.source.ipv4": "10.0.0.5",
+         "xdm.network.http.method": "GET",
+         "xdm.network.http.url": "/app/login",
+         "xdm.source.user_agent": "Mozilla/5.0 (Windows NT 10.0)"},
+    ),
+    "wlc_prepend": (
+        r'''[MODEL: dataset=cisco_wlc_raw]
+filter
+    _raw_log != null
+| alter
+    _wlc_host     = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0),
+    _wlc_mnemonic = arrayindex(regextract(_raw_log, "%(\w+-\d-\w+):"), 0),
+    _wlc_mac      = arrayindex(regextract(_raw_log, "for mobile ([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})"), 0)
+| alter
+    xdm.observer.name = _wlc_host,
+    xdm.event.original_event_type = _wlc_mnemonic,
+    xdm.source.host.mac_addresses = arraycreate(_wlc_mac)
+;''',
+        '<134>Jul 14 15:41:24 wlc-mgmt.example.net wlc01: *apfReceiveTask: Jul 14 15:41:24.640: %APF-6-USER_NAME_CREATED: [SS]apf_ms.c:9003 Username entry (3E-A8-8D-20-D1-1E) with length (17) created for mobile 3e:a8:8d:20:d1:1e',
+        {"xdm.observer.name": "wlc-mgmt.example.net",
+         "xdm.event.original_event_type": "APF-6-USER_NAME_CREATED",
+         "xdm.source.host.mac_addresses": ["3e:a8:8d:20:d1:1e"]},
+    ),
 }
 
 
@@ -158,6 +248,82 @@ class TestExtractionRecipes(unittest.TestCase):
         out = _verify.evaluate_rule(*RECIPES["scalars"][:2])
         self.assertEqual(
             out.get("xdm.source.host.mac_addresses"), ["aa:bb:cc:dd:ee:ff"]
+        )
+
+    def test_clf_recipe_on_tomcat_fixture(self):
+        # The Combined Log Format recipe extracts HTTP fields from a real
+        # Tomcat access-log fixture (a different line than the doc sample).
+        fixture = (
+            bundle_root() / "tests" / "fixtures" / "apache_tomcat_access.log"
+        ).read_text(encoding="utf-8").splitlines()
+        rule = RECIPES["clf"][0]
+        out = _verify.evaluate_rule(rule, fixture[1])  # the POST /app/admin 403 line
+        self.assertEqual(out.get("xdm.network.http.method"), "POST")
+        self.assertEqual(out.get("xdm.network.http.url"), "/app/admin")
+        self.assertEqual(out.get("xdm.source.ipv4"), "10.0.0.9")
+
+    def test_recipe5_prepend_tolerant_across_arrival_shapes(self):
+        # HARD RULE: the same source arrives no-PRI, with a PRI, and
+        # relay-prepended -- the prepend-tolerant host must yield the origin
+        # host (host01) in every form, and proc/pid are token-anchored.
+        rule = RECIPES["syslog3164"][0]
+        base = "sshd[1234]: Accepted password for alice"
+        shapes = {
+            "no-PRI": f"Jun 19 09:51:59 host01 {base}",
+            "PRI": f"<134>Jun 19 09:51:59 host01 {base}",
+            "relayed": (
+                "<190>Jun 30 12:00:10 relay01 "
+                f"<134>Jun 19 09:51:59 host01 {base}"
+            ),
+        }
+        for name, line in shapes.items():
+            out = _verify.evaluate_rule(rule, line)
+            self.assertEqual(out.get("xdm.observer.name"), "host01", name)
+            self.assertEqual(out.get("xdm.source.process.name"), "sshd", name)
+            self.assertEqual(out.get("xdm.source.process.pid"), 1234, name)
+
+    def test_wlc_recipe_direct_and_prepend_identical(self):
+        # The WLC recipe extracts the identical mnemonic + MAC whether the
+        # line is relay-prepended or direct off the box (host is only present
+        # in the prepended envelope). Proves the hard rule end to end.
+        rule = RECIPES["wlc_prepend"][0]
+        prepended = RECIPES["wlc_prepend"][1]
+        direct = (
+            "*apfReceiveTask: Jul 14 15:41:24.640: %APF-6-USER_NAME_CREATED: "
+            "[SS]apf_ms.c:9003 Username entry (3E-A8-8D-20-D1-1E) with length "
+            "(17) created for mobile 3e:a8:8d:20:d1:1e"
+        )
+        op = _verify.evaluate_rule(rule, prepended)
+        od = _verify.evaluate_rule(rule, direct)
+        for out in (op, od):
+            self.assertEqual(
+                out.get("xdm.event.original_event_type"),
+                "APF-6-USER_NAME_CREATED",
+            )
+            self.assertEqual(
+                out.get("xdm.source.host.mac_addresses"),
+                ["3e:a8:8d:20:d1:1e"],
+            )
+        # Host is sourced from the envelope, so only the prepended form has it.
+        self.assertEqual(op.get("xdm.observer.name"), "wlc-mgmt.example.net")
+        self.assertIsNone(od.get("xdm.observer.name"))
+
+    def test_wlc_recipe_on_users_exact_line(self):
+        # The exact line the user reported (a real Cisco WLC relay-prepend).
+        rule = RECIPES["wlc_prepend"][0]
+        line = (
+            "<134>Jul 14 15:41:24 mo332-ha-mgmt.au.simon.net moe12-active: "
+            "*haSSOServiceTask3: Jul 14 15:41:24.640: %APF-6-USER_NAME_CREATED: "
+            "[SS]apf_ms.c:9003 Username entry (3E-A8-8D-20-D1-1E) with length "
+            "(17) created for mobile 3e:a8:8d:20:d1:1e"
+        )
+        out = _verify.evaluate_rule(rule, line)
+        self.assertEqual(out.get("xdm.observer.name"), "mo332-ha-mgmt.au.simon.net")
+        self.assertEqual(
+            out.get("xdm.event.original_event_type"), "APF-6-USER_NAME_CREATED"
+        )
+        self.assertEqual(
+            out.get("xdm.source.host.mac_addresses"), ["3e:a8:8d:20:d1:1e"]
         )
 
     def test_doc_carries_every_recipe(self):

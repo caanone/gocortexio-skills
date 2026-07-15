@@ -39,6 +39,41 @@ mandatory `filter _raw_log != null` guard). Never assign `_time` in a
 MODEL rule (Cortex sets it at INGEST -- see WARN-018); the envelope
 timestamp is therefore NOT MAPPED.
 
+## HARD RULE: support both direct and relay-prepended syslog
+
+Syslog rarely arrives byte-for-byte as the device emits it. A source
+reaches Cortex both direct (the device's own bytes) and behind an
+intermediate relay that prepends its own header to the payload. The
+build-time sample usually shows only one of these, but the rule must
+handle both -- so for every syslog source this is non-negotiable, not a
+per-vendor nicety. Two arrival shapes to design for:
+
+1. Double `<PRI>` -- the relay wraps the whole original line:
+   `<190>Jun 30 12:00:10 relay01 <134>Jun 30 12:00:04 originhost app: msg`
+2. Transport wrap of a device message -- a `<PRI> ts host tag:` header in
+   front of a device body that may restate its own timestamp/task:
+   `<134>Jul 14 15:41:24 relay.example.net wlc01: *taskName: Jul 14 15:41:24.640: %APF-6-USER_NAME_CREATED: ... for mobile 3e:a8:8d:20:d1:1e`
+   Direct off the box the same event is just
+   `*taskName: Jul 14 15:41:24.640: %APF-6-USER_NAME_CREATED: ...` -- no
+   `<PRI>`, no relay host.
+
+A rule that anchors on a fixed prefix silently drops every record whose
+arrival form differs from the sample. Make it robust in two places:
+
+- Envelope (host / PRI / tag): use the relay-aware Stage 0 below. Its
+  greedy `^.*` prefix absorbs any relay header(s) and captures the origin
+  host + origin PRI. A single, direct line matches identically.
+- Body (every payload field): anchor on the field's own token with a
+  position-independent `regextract` -- `key=([^\s]+)`, `[field: (...)]`,
+  the `%FAC-SEV-MNEMONIC` token, `for mobile (<mac>)` -- so it matches
+  whether or not a prefix is present. Never anchor a body field on `^`,
+  never extract "everything after the header" (`^...(.*)`), and never rely
+  on a fixed column offset from the header.
+
+The bundled linter enforces the body half: a `^`-anchored / positional
+body capture in a syslog rule is flagged WARN-047. The relay-aware
+envelope captures are exempt (they are the sanctioned transport layer).
+
 ## Stage 0 -- canonical envelope capture (RFC 3164 and RFC 5424)
 
 Anchor on the priority token, never on a vendor literal. The host sits
@@ -46,18 +81,31 @@ in a different position in each RFC, so capture both and coalesce; the
 two patterns are mutually exclusive (5424 has a numeric version after
 the priority, 3164 has a month name), so the coalesce is unambiguous.
 
+The capture is relay-aware: the RFC 3164 host and priority are read
+through a greedy `^.*` prefix so that an intermediate relay which prepends
+its own `<PRI> ts host` header (see the HARD RULE section above) is
+skipped, and the innermost origin host/PRI are captured -- not the
+relay's. On a direct line the greedy prefix matches nothing extra, so the
+result is byte-identical. The RFC 5424 host stays `^`-anchored because a
+5424 relay carries its identity in structured data, not a raw prepend.
+
 ```
 filter
     _raw_log != null
 | alter
-    _pri        = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
+    _pri        = to_integer(to_number(coalesce(arrayindex(regextract(_raw_log, "^.*<(\d{1,3})>[A-Za-z]{3}\s+\d+\s+[\d:]+"), 0), arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0)))),
     _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
-    _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+    _host_3164  = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
     _syslog_host_raw = coalesce(_host_5424, _host_3164)
 | alter
     _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
 ```
+
+`_pri` takes the origin priority through the greedy 3164 capture and
+falls back to the first `<NNN>` for RFC 5424 / PRI-only lines. The greedy
+`.*` stops at the last `<PRI>` that is followed by a timestamp, so a stray
+`<500>`-style token inside the payload never captures.
 
 RFC 5424 permits the NILVALUE `-` for the HOSTNAME field, so the final
 guard stage nulls it out: a relay that hides the host can never leak a
@@ -68,7 +116,7 @@ Optional envelope fields (capture only when you will map them):
 
 ```
     _app_5424 = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+\S+\s+(\S+)\s"), 0),
-    _tag_3164 = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\S+\s+([A-Za-z0-9_\-]+)(?:\[|:)"), 0),
+    _tag_3164 = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\S+\s+([A-Za-z0-9_\-]+)(?:\[|:)"), 0),
     _sd_param = arrayindex(regextract(_raw_log, "\[[^\]]*\bKEYNAME=\"([^\"]+)\""), 0)
 ```
 
@@ -147,10 +195,14 @@ underscore field is rejected by the linter as ERR-027.)
 A relay can forward a record with the `<NNN>` token removed. Then `_pri`
 is null and the decode chain yields null all the way through, which the
 coalesce above handles: severity and log_level fall to whatever the
-payload provides. The host capture also returns null, because it is
-anchored on the priority token by design (never on a vendor literal), and
-without that anchor there is no fixed host position. Read the host from a
-payload field in that case rather than re-anchoring on a vendor word.
+payload provides. The Stage 0 host captures also return null, because
+they are anchored on the priority token by design (never on a vendor
+literal). For a source that arrives both with and without the PRI, use
+the prepend-tolerant host in extraction-recipes.md Recipe 5 -- a greedy
+`^.*` prefix with the `<PRI>` made optional
+(`^.*(?:<\d{1,3}>)?[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s`) captures the
+host across no-PRI, PRI, and relayed lines alike. Otherwise read the host
+from a payload field rather than re-anchoring on a vendor word.
 
 ## What stays NOT MAPPED
 
@@ -167,6 +219,10 @@ NOT MAPPED
 - Priority decode is a coalesce fallback only; it never overrides payload severity.
 - Host capture is anchored on the priority token, never on a vendor literal.
   The linter flags a vendor-anchored header regex as WARN-040.
+- The capture is relay-aware (greedy `^.*` prefix): direct and
+  relay-prepended lines both yield the origin host / PRI. Body fields must
+  be token-anchored so they too match both forms -- a `^`-anchored /
+  positional body capture is flagged WARN-047.
 - If you capture the priority, decode it: a PRI captured but never turned
   into log_level or severity is flagged as WARN-041.
 - Facility and severity live in separate alter stages (ERR-024).
@@ -177,12 +233,14 @@ NOT MAPPED
 
 ```
 [ ] filter _raw_log != null is the first stage
-[ ] PRI captured with ^<(\d{1,3})> (when present)
-[ ] host captured via the RFC 3164 + RFC 5424 coalesce, not a vendor literal
+[ ] PRI captured relay-aware: coalesce(^.*<(\d{1,3})> origin, ^<(\d{1,3})> first)
+[ ] host captured via the relay-aware RFC 3164 (^.*<) + RFC 5424 coalesce, not a vendor literal
+[ ] every payload field token-anchored (no ^-anchored body, no everything-after-header) -- WARN-047
 [ ] NILVALUE hostname (-) guarded to null, never mapped literally
 [ ] priority decoded with function-form arithmetic (no infix, no modulo)
 [ ] facility and severity in separate alter stages (no sibling reference)
 [ ] severity/log_level use coalesce(payload, priority) -- payload wins
 [ ] no _time assignment (WARN-018)
-[ ] decode proven with verify_rule.py: <134> -> Informational, <12> -> severity 4
+[ ] proven with verify_rule.py on BOTH a direct and a relay-prepended copy of the sample
+[ ] decode proven: <134> -> Informational, <12> -> severity 4
 ```

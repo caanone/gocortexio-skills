@@ -1259,5 +1259,88 @@ class TestWarn046CatchAll(unittest.TestCase):
         self.assertNotIn("WARN-046", _rule_ids_from(rule))
 
 
+class TestWarn047PrependFragile(unittest.TestCase):
+    """A syslog rule must extract identically whether the record arrives
+    direct or behind a relay-prepended header. A ^-anchored / positional
+    body capture (or an everything-after-the-header grab) breaks on the
+    other form, so it is flagged WARN-047 (advisory). The relay-aware
+    envelope captures and token-anchored bodies are exempt; non-syslog
+    rules are never examined."""
+
+    def _syslog_head(self) -> str:
+        # A rule is 'syslog' once it carries the PRI/envelope capture.
+        return (
+            "[MODEL: dataset=x_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    _pri = to_integer(to_number(arrayindex(regextract('
+            '_raw_log, "^<(\\d{1,3})>"), 0))),\n'
+        )
+
+    def test_positional_body_capture_flagged(self):
+        rule = (
+            self._syslog_head()
+            + '    _m = arrayindex(regextract(_raw_log, '
+            '"^%(\\w+-\\d-\\w+):"), 0)\n'
+            "| alter\n"
+            "    xdm.event.original_event_type = _m,\n"
+            "    xdm.event.log_level = if(_pri != null, "
+            "XDM_CONST.LOG_LEVEL_INFORMATIONAL)\n;\n"
+        )
+        vios = [v for v in lint(rule) if v["rule_id"] == "WARN-047"]
+        self.assertEqual(len(vios), 1, vios)
+        self.assertEqual(vios[0]["severity"], "warning")
+
+    def test_everything_after_header_grab_flagged(self):
+        rule = (
+            self._syslog_head()
+            + '    _body = arrayindex(regextract(_raw_log, '
+            '"^<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+\\S+\\s+(.*)"), 0)\n'
+            "| alter\n"
+            "    xdm.event.description = _body,\n"
+            "    xdm.event.log_level = if(_pri != null, "
+            "XDM_CONST.LOG_LEVEL_INFORMATIONAL)\n;\n"
+        )
+        self.assertIn("WARN-047", _rule_ids_from(rule))
+
+    def test_token_anchored_body_not_flagged(self):
+        rule = (
+            self._syslog_head()
+            + '    _m = arrayindex(regextract(_raw_log, '
+            '"%(\\w+-\\d-\\w+):"), 0)\n'
+            "| alter\n"
+            "    xdm.event.original_event_type = _m,\n"
+            "    xdm.event.log_level = if(_pri != null, "
+            "XDM_CONST.LOG_LEVEL_INFORMATIONAL)\n;\n"
+        )
+        self.assertNotIn("WARN-047", _rule_ids_from(rule))
+
+    def test_relay_aware_envelope_not_flagged(self):
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    _host = arrayindex(regextract(_raw_log, '
+            '"^.*<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+(\\S+)\\s"), 0)\n'
+            "| alter\n"
+            "    xdm.observer.name = _host\n;\n"
+        )
+        self.assertNotIn("WARN-047", _rule_ids_from(rule))
+
+    def test_non_syslog_positional_capture_not_flagged(self):
+        # A CLF web-access rule anchors the client IP on ^ but is not syslog,
+        # so the prepend rule does not apply.
+        rule = (
+            "[MODEL: dataset=clf_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    _ip = arrayindex(regextract(_raw_log, '
+            '"^(\\d{1,3}(?:\\.\\d{1,3}){3})"), 0)\n'
+            "| alter\n"
+            "    xdm.source.ipv4 = _ip\n;\n"
+        )
+        self.assertNotIn("WARN-047", _rule_ids_from(rule))
+
+
 if __name__ == "__main__":
     unittest.main()

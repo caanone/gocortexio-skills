@@ -30,6 +30,7 @@ Python 3.9+ stdlib only.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -64,23 +65,36 @@ _TACTIC_IDS = {
     "TA0040": "MITRE_TACTIC_IMPACT",
 }
 
-# Curated common-technique ID -> constant-suffix table. Generous on
-# purpose; every entry is validated against the documented list at
-# runtime, so an entry that is not in references/xdm-const.md is dropped
-# rather than emitted.
-_TECHNIQUE_IDS = {
+# The full ATT&CK T-code -> constant-suffix crosswalk (and the tactic
+# keyword table) ships as an asset so any explicit id in a log resolves,
+# not just a curated few. Every resolved constant is still validated
+# against the documented const list at runtime, so a stale entry is
+# dropped rather than emitted. If the asset is missing, a small built-in
+# fallback keeps the common techniques working.
+_CROSSWALK_PATH = (
+    Path(__file__).resolve().parent.parent / "assets" / "mitre_crosswalk.json"
+)
+_TECHNIQUE_FALLBACK = {
     "T1078": "MITRE_TECHNIQUE_VALID_ACCOUNTS",
     "T1059": "MITRE_TECHNIQUE_COMMAND_AND_SCRIPTING_INTERPRETER",
     "T1110": "MITRE_TECHNIQUE_BRUTE_FORCE",
     "T1566": "MITRE_TECHNIQUE_PHISHING",
-    "T1133": "MITRE_TECHNIQUE_EXTERNAL_REMOTE_SERVICES",
     "T1021": "MITRE_TECHNIQUE_REMOTE_SERVICES",
-    "T1496": "MITRE_TECHNIQUE_RESOURCE_HIJACKING",
-    "T1087": "MITRE_TECHNIQUE_ACCOUNT_DISCOVERY",
-    "T1098": "MITRE_TECHNIQUE_ACCOUNT_MANIPULATION",
-    "T1136": "MITRE_TECHNIQUE_CREATE_ACCOUNT",
-    "T1561": "MITRE_TECHNIQUE_DISK_WIPE",
 }
+
+
+def _load_crosswalk() -> dict:
+    try:
+        return json.loads(_CROSSWALK_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+_CROSSWALK = _load_crosswalk()
+_TECHNIQUE_IDS = _CROSSWALK.get("techniques") or _TECHNIQUE_FALLBACK
+if _CROSSWALK.get("tactics"):
+    _TACTIC_IDS = dict(_CROSSWALK["tactics"])
+_TACTIC_KEYWORDS = _CROSSWALK.get("tactic_keywords", {})
 
 
 def resolve_ids(kind: str, ids: List[str]) -> Tuple[List[Tuple[str, str]], List[str]]:
@@ -152,14 +166,54 @@ def render(
     return snippet
 
 
+def render_fuzzy_tactics(field: str, temp: str) -> str:
+    """Emit a high-confidence keyword -> tactic MULTI-MATCH chain.
+
+    xdm.alert.mitre_tactics is an Array, so this is one if() per tactic
+    (matching that tactic's keyword phrases in the lowercased source
+    column), arraycreate-wrapped and arrayfilter-pruned so EVERY matched
+    tactic lands in the array -- not first-match-wins. The array is empty
+    when nothing matches (no guessed tactic). Only tactic constants that
+    are in the documented list are emitted."""
+    if not _TACTIC_KEYWORDS:
+        raise ValueError(
+            "tactic keyword table unavailable (missing mitre_crosswalk.json)"
+        )
+    known = all_consts()
+    branches: List[str] = []
+    for suffix, phrases in _TACTIC_KEYWORDS.items():
+        const = f"XDM_CONST.{suffix}"
+        if const not in known or not phrases:
+            continue
+        cond = " or ".join(
+            f'lowercase({temp}) contains "{p}"' for p in phrases
+        )
+        branches.append(f"    if({cond}, {const}, null)")
+    if not branches:
+        raise ValueError("no tactic constants resolved")
+    body = ",\n".join(branches)
+    return (
+        f"{field} = arrayfilter(arraycreate(\n{body}\n), "
+        '"@element" != null)'
+    )
+
+
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(
         description="Map MITRE technique / tactic IDs or names to "
         "XDM_CONST.MITRE_* constants and emit the assignment."
     )
-    ap.add_argument("--kind", choices=("technique", "tactic"), required=True)
+    ap.add_argument("--kind", choices=("technique", "tactic"), default=None,
+                    help="required for --ids / --names")
     ap.add_argument("--ids", help="comma-separated ATT&CK IDs (T#### / TA####)")
     ap.add_argument("--names", help="comma-separated technique / tactic names")
+    ap.add_argument(
+        "--fuzzy-tactics",
+        dest="fuzzy_tactics",
+        action="store_true",
+        help="emit a high-confidence keyword -> tactic MULTI-MATCH array "
+        "chain over --temp (an alert category / name / description column)",
+    )
     ap.add_argument("--field", default=None, help="override the target XDM field")
     ap.add_argument("--temp", default="_mitre_ids", help="source temp (default _mitre_ids)")
     ap.add_argument(
@@ -177,8 +231,25 @@ def main(argv: List[str]) -> int:
     )
     args = ap.parse_args(argv[1:])
 
-    if not args.ids and not args.names:
-        sys.stderr.write("error: provide --ids or --names\n")
+    if not (args.ids or args.names or args.fuzzy_tactics):
+        sys.stderr.write("error: provide --ids, --names, or --fuzzy-tactics\n")
+        return 1
+
+    if args.fuzzy_tactics:
+        field = args.field or _DEFAULT_FIELD["tactic"]
+        # Fuzzy runs over an alert category / name / description column, so
+        # the id-oriented default temp is not a sensible source here.
+        temp = args.temp if args.temp != "_mitre_ids" else "_category"
+        try:
+            snippet = render_fuzzy_tactics(field, temp)
+        except ValueError as exc:
+            sys.stderr.write(f"error: {exc}\n")
+            return 1
+        sys.stdout.write(snippet + "\n")
+        return 0
+
+    if not args.kind:
+        sys.stderr.write("error: --kind is required with --ids / --names\n")
         return 1
 
     field = args.field or _DEFAULT_FIELD[args.kind]

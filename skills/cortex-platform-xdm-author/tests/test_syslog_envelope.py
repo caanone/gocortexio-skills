@@ -76,20 +76,23 @@ class TestSyslogLint(unittest.TestCase):
         self.assertNotIn("WARN-041", ids)
 
     def test_warn040_silent_when_pri_anchored(self):
-        # A header that IS PRI-anchored but still names a vendor literal at
-        # the tail is the canonical idiom and must not trip WARN-040.
+        # The canonical host capture is relay-aware (greedy ^.* prefix to the
+        # innermost origin header) and must not trip WARN-040.
         rule = (
             "[MODEL: dataset=demo_raw]\n"
             "filter\n    _raw_log != null\n"
             "| alter\n"
             '    _host = arrayindex(regextract(_raw_log, '
-            '"^<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+(\\S+)\\s"), 0)\n'
+            '"^.*<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+(\\S+)\\s"), 0)\n'
             "| alter\n"
             '    xdm.observer.vendor = "Acme",\n'
             '    xdm.event.type = "ALERT",\n'
             "    xdm.observer.name = _host\n;\n"
         )
-        self.assertNotIn("WARN-040", _ids(rule))
+        ids = _ids(rule)
+        self.assertNotIn("WARN-040", ids)
+        # The relay-aware envelope host is not a prepend-fragile body capture.
+        self.assertNotIn("WARN-047", ids)
 
 
 class TestSyslogPriorityDecode(unittest.TestCase):
@@ -144,6 +147,28 @@ class TestSyslogPriorityDecode(unittest.TestCase):
         self.assertEqual(
             out["xdm.event.log_level"], "XDM_CONST.LOG_LEVEL_INFORMATIONAL"
         )
+        self.assertEqual(out["xdm.event.id"], "6")
+
+    def test_relay_prepend_captures_origin_not_relay(self):
+        # An intermediate relay prepends its own <PRI> ts host in front of
+        # the original line. The relay-aware Stage 0 must recover the ORIGIN
+        # host and the ORIGIN priority, not the relay's.
+        relayed = (
+            "<190>Jun 30 12:00:10 relay01 "
+            "<134>Jun 30 12:00:04 originhost app: login ok"
+        )
+        out = _verify.evaluate_rule(self.rule, relayed)
+        self.assertEqual(out["xdm.observer.name"], "originhost")  # not relay01
+        self.assertEqual(out["xdm.event.id"], "6")  # origin PRI 134 -> sev 6
+        self.assertEqual(
+            out["xdm.event.log_level"], "XDM_CONST.LOG_LEVEL_INFORMATIONAL"
+        )
+
+    def test_direct_line_still_captures_host(self):
+        # The greedy prefix is byte-identical on a direct single-header line.
+        direct = "<134>Jun 30 12:00:04 originhost app: login ok"
+        out = _verify.evaluate_rule(self.rule, direct)
+        self.assertEqual(out["xdm.observer.name"], "originhost")
         self.assertEqual(out["xdm.event.id"], "6")
 
 

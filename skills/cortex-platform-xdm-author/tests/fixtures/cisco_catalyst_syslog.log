@@ -1,0 +1,4 @@
+<189>Jun 30 11:59:40 sw1 %LINK-3-UPDOWN: Interface GigabitEthernet1/0/24, changed state to up
+<190>Jun 30 12:00:04 sw1 %SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: admin] [Source: 10.0.0.5] [localport: 22] at 12:00:04 UTC Mon Jun 30 2025
+<188>Jun 30 12:01:10 sw1 %SEC_LOGIN-4-LOGIN_FAILED: Login failed [user: bob] [Source: 10.0.0.9] [localport: 22] [Reason: Login Authentication Failed] at 12:01:10 UTC Mon Jun 30 2025
+<189>Jun 30 12:02:00 sw1 %SYS-5-CONFIG_I: Configured from console by admin on vty0 (10.0.0.5)

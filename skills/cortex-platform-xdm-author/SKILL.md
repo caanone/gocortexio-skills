@@ -1,17 +1,17 @@
 ---
 name: cortex-platform-xdm-author
 description: Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL). Turns a raw vendor log sample into a production-ready rule with a MAPPED-header comment block.
-version: 1.7.0
+version: 1.8.0-beta.1
 ---
 
 # cortex-platform-xdm-author
 
 Author Cortex XSIAM data model rules in Cortex Query Language (XQL) from raw vendor log samples.
 
-Version 1.7.0 makes classification a PER-RECORD decision. Every rule decides `xdm.event.type` and `xdm.event.tags` on each record from its own discriminators (not one label stamped across the feed), draws tags from the full closed six-member `EVENT_TAG` enum (authentication, network, cloud, saas, onprem, vpn), and gives any record it cannot classify a catch-all (`xdm.event.original_event_type = "GOCORTEX_UNMODELLED"`, blank tags) so a `datamodel` search never returns fewer rows than the raw dataset. (Version 1.6.1 added a process / command-execution mapping capability and a verified extraction-recipe layer, corrected `xdm.auth.service` to the authentication service name, and broadened vendor field-name coverage.) On top of base rule authoring, the skill provides these auto-detected mapping capabilities, each backed by an advisory linter check:
+Version 1.8.0-beta.1 makes syslog extraction prepend-robust: every generated syslog rule captures identically whether a record arrives direct off the device or behind an intermediate relay that prepends its own `<PRI>` header -- a relay-aware Stage 0 (greedy `^.*` prefix -> origin host + origin PRI) plus token-anchored body extraction, enforced by advisory lint WARN-047. Version 1.8.0 broadens vendor coverage -- Celonis audit-log authentication plus Nokia SR OS, Cisco Catalyst, Cisco WLC, HPE ArubaOS-Switch, Huawei VRP and Apache / Tomcat -- through new verified extraction recipes and field anchors. Version 1.7.2 added authoritative MITRE ATT&CK mapping (the full T-code -> constant crosswalk plus high-confidence multi-match tactic keywords) and fixed the top-of-rule comment order: SPDX licence always first, then the REVIEW UNMODELLED query and a RAISE SKILL ISSUES pointer always last. Version 1.7.0 made classification a PER-RECORD decision: every rule decides `xdm.event.type` and `xdm.event.tags` on each record from its own discriminators (not one label stamped across the feed), draws tags from the full closed six-member `EVENT_TAG` enum (authentication, network, cloud, saas, onprem, vpn), and gives any record it cannot classify a catch-all (`xdm.event.original_event_type = "GOCORTEX_UNMODELLED"`, blank tags) so a `datamodel` search never returns fewer rows than the raw dataset. (Version 1.6.1 added a process / command-execution mapping capability and a verified extraction-recipe layer, corrected `xdm.auth.service` to the authentication service name, and broadened vendor field-name coverage.) On top of base rule authoring, the skill provides these auto-detected mapping capabilities, each backed by an advisory linter check:
 
 - Record-level classification and catch-all (new in 1.7.0) -- `xdm.event.type` and `xdm.event.tags` are decided per record via `if()`, tags come from the closed six-member `EVENT_TAG` enum, an unrecognised record falls through to blank tags, and nothing is filtered out (unclassified records get the `GOCORTEX_UNMODELLED` sentinel so the datamodel row count equals the raw count). WARN-045 flags an invented tag; WARN-046 flags a content filter that drops records without a catch-all. See [references/record-classification.md](references/record-classification.md).
-- Syslog Stage 0 envelope -- PRI-anchored host capture and priority decode for any syslog source (WARN-040 / WARN-041).
+- Syslog Stage 0 envelope -- relay-aware host capture and priority decode for any syslog source (WARN-040 / WARN-041). HARD RULE: syslog reaches Cortex both direct and behind an intermediate relay that prepends its own `<PRI>` header, so every generated syslog rule must capture identically for both -- the envelope skips any relay prefix with a greedy `^.*` (origin host + origin PRI) and every payload field is anchored on its own token, never on `^`. A `^`-anchored / positional body capture is flagged WARN-047. See [references/syslog-envelope.md](references/syslog-envelope.md).
 - Authentication Story -- the mandatory XDM field set for login / logon / MFA / SSO events, including the account-class fields `identity_type` / `user_type` and `xdm.auth.service` as the service name (Kerberos, NTLM, OAuth2, SSO, ...), with type-valid fail-safe padding (WARN-042).
 - Network / Firewall Story -- the mandatory XDM field set for firewall, flow, proxy, IDS/IPS and DNS traffic events (WARN-043). Network is the foundational layer, so an IDS or WAF event maps it on top of its primary role, and a dual event (a VPN login) takes both story sets.
 - Process / command execution (new in 1.6.1) -- the recommended `xdm.*.process.*` set for endpoint / EDR process starts, command executions and script runs (WARN-044), including AAA / network-device command accounting (a TACACS+ `cmd=` record), which is a command execution mapped to `xdm.target.process.command_line` with operation `OPERATION_TYPE_AUDIT` -- not authentication.
@@ -37,19 +37,34 @@ The field-anchor synonym index is in scope as a static lookup table. The bundle 
 
 ## Outputs produced
 
-One XQL file (or one code block if inline), containing:
+One XQL file (or one code block if inline). The top comment block MUST follow this fixed order for predictability -- SPDX licence always first, the skill-issues pointer always last:
 
-- A MAPPED-header comment block (mandatory). Vendor / product / dataset / one-paragraph description / Alert-or-Event Field Mapping with `->` arrows / NOT MAPPED list with reasons / SPDX licence. See [assets/modeling_header_template.xql](assets/modeling_header_template.xql).
-- A provenance block (mandatory), emitted verbatim as comment lines near the top so a script can grep it. Fill `GOCORTEX_SKILLS_MODEL` with the model id that authored the rule, `GOCORTEX_SKILLS_SKILL_NAME` / `GOCORTEX_SKILLS_SKILL_VERSION` from this skill's frontmatter (`cortex-platform-xdm-author` / `1.7.0`), and `GOCORTEX_SKILLS_SKILL_WARNING_COUNT` with the advisory count from the final `scripts/lint_rule.py` run:
+1. SPDX licence header (`SPDX-FileCopyrightText` + `SPDX-License-Identifier`) -- ALWAYS the first lines.
+2. Provenance block (`GOCORTEX_SKILLS_*`).
+3. Identity: vendor / product / dataset / one-paragraph description.
+4. ALERT / EVENT FIELD MAPPING (`->` arrows) + any advisory NOTES + NOT MAPPED list with reasons.
+5. REVIEW UNMODELLED query.
+6. RAISE SKILL ISSUES pointer.
+
+Then the `[MODEL: ...]` body. The sections in detail:
+
+- A MAPPED-header comment block (mandatory). Vendor / product / dataset / one-paragraph description / Alert-or-Event Field Mapping with `->` arrows / NOT MAPPED list with reasons. The SPDX licence sits at the very TOP of this block (never at the bottom). See [assets/modeling_header_template.xql](assets/modeling_header_template.xql).
+- A provenance block (mandatory), emitted verbatim as comment lines directly under the SPDX header so a script can grep it. Fill `GOCORTEX_SKILLS_MODEL` with the model id that authored the rule, `GOCORTEX_SKILLS_SKILL_NAME` / `GOCORTEX_SKILLS_SKILL_VERSION` from this skill's frontmatter (`cortex-platform-xdm-author` / `1.8.0-beta.1`), and `GOCORTEX_SKILLS_SKILL_WARNING_COUNT` with the advisory count from the final `scripts/lint_rule.py` run:
   ```
   // Generated via
   // GOCORTEX_SKILLS_MODEL="<model id>"
   // GOCORTEX_SKILLS_SKILL_NAME="cortex-platform-xdm-author"
-  // GOCORTEX_SKILLS_SKILL_VERSION="1.7.0"
+  // GOCORTEX_SKILLS_SKILL_VERSION="1.8.0-beta.1"
   // GOCORTEX_SKILLS_SKILL_WARNING_COUNT="<lint warning count>"
   ```
   `scripts/scaffold_rule.py` emits this automatically (name / version from SKILL.md, model and count from the build environment or its self-lint); when hand-authoring, add it yourself.
-- The commented REVIEW UNMODELLED query (mandatory) so unclassified records are discoverable -- see [references/record-classification.md](references/record-classification.md).
+- The commented REVIEW UNMODELLED query (mandatory), placed as the second-to-last section, so unclassified records are discoverable -- see [references/record-classification.md](references/record-classification.md).
+- A RAISE SKILL ISSUES pointer (mandatory), the LAST comment section, inviting the user to report a mis-mapping and include the REVIEW UNMODELLED output:
+  ```
+  // RAISE SKILL ISSUES -- if this rule mis-modelled something, please open
+  // an issue and include the REVIEW UNMODELLED output above:
+  //   https://github.com/gocortexio/skills/issues
+  ```
 - A `[MODEL: dataset=<vendor>_<product>_raw]` block in the three-stage shape: `filter` -> `alter` (extract) -> `alter` (assign).
 
 ## Authoring workflow
@@ -104,7 +119,7 @@ Run this before emitting, so the same log maps the same way every time. Each ite
 
 - Outcome only on a real result. Set `xdm.event.outcome` only when the log reports success / failure / blocked. A detection disposition (`alert`, `monitor`, `isolate`) is NOT an outcome -- keep it in `xdm.observer.action` (see transformation-patterns.md "Event outcome").
 - Host + IP -> emit the address companion. When `xdm.<side>.host.hostname` and `xdm.<side>.ipv4` are both set, also set `xdm.<side>.host.ipv4_addresses = if(ip != null, arraycreate(ip), null)` (WARN-038).
-- Syslog source -> parse the envelope (Stage 0) before the payload. Anchor the host on the `<NNN>` priority token (never a vendor literal), and decode the priority into `xdm.event.log_level` / `xdm.alert.severity` as a fallback under the payload severity -- see [references/syslog-envelope.md](references/syslog-envelope.md) (WARN-040 vendor-anchored header, WARN-041 priority captured but never decoded).
+- Syslog source -> parse the envelope (Stage 0) before the payload, and make it prepend-robust (HARD RULE). The same source arrives direct and behind a relay that prepends its own `<PRI>` header, so capture the envelope relay-aware (greedy `^.*` -> origin host + origin PRI) and anchor every payload field on its own token, never on `^` -- extraction must be identical for both arrival forms even if the sample showed only one. Verify a syslog rule against both a direct and a relay-prepended copy of the sample. Decode the priority into `xdm.event.log_level` / `xdm.alert.severity` as a fallback under the payload severity -- see [references/syslog-envelope.md](references/syslog-envelope.md) (WARN-040 vendor-anchored header, WARN-041 priority captured but never decoded, WARN-047 prepend-fragile body capture).
 - Named asset is a host, cloud object is a resource. An OT / ICS asset (`asset=PLC-17`) or server name goes to `xdm.target.host.hostname`; a cloud resource goes to `xdm.target.resource.name` (see pitfall-traps.md).
 - Numeric severity scale -> band both fields. Read the vendor band table, normalise labels to Critical / High / Medium / Low (vendor `Moderate` -> `Medium`), and emit both `xdm.alert.severity` and `xdm.event.log_level` (transformation-patterns.md "Banded numeric scoring").
 - Risk / deviation metric -> `xdm.alert.risks`. A ratio or deviation with no typed numeric home is parked in `xdm.alert.risks` (String), not dropped. If you do drop it, write "intentionally omitted", never "no XDM home".
@@ -127,6 +142,7 @@ Run this before emitting, so the same log maps the same way every time. Each ite
 - [references/network-mapping.md](references/network-mapping.md) -- mandatory XDM field set for network events (auto-detected; advisory WARN-043; dual-story tag union)
 - [references/process-mapping.md](references/process-mapping.md) -- recommended XDM mapping for process / command-execution events (endpoint / EDR process starts, script runs, AAA command accounting; auto-detected, advisory WARN-044)
 - [references/record-classification.md](references/record-classification.md) -- per-record classification of `xdm.event.type` / `xdm.event.tags` over the closed six-member EVENT_TAG enum, and the catch-all that keeps the datamodel row count equal to the raw count (advisory WARN-045 / WARN-046)
+- [references/mitre-mapping.md](references/mitre-mapping.md) -- MITRE ATT&CK into the `xdm.alert.mitre_techniques` / `mitre_tactics` arrays: direct id/name mapping via the full authoritative crosswalk (`assets/mitre_crosswalk.json`, resolved by `scripts/mitre_map.py`), and high-confidence keyword -> tactic fuzzy mapping that collects EVERY matched tactic (multi-match); auto-detected by the profiler
 - [references/pitfall-traps.md](references/pitfall-traps.md) -- non-existent paths, confused pairs
 - [references/compatibility-notes.md](references/compatibility-notes.md) -- `_gc_raw` caveats, deprecated fields
 - [references/failure-modes.md](references/failure-modes.md) -- "if you see this in your draft, stop and do that" empirical notes
@@ -141,7 +157,7 @@ All scripts are Python 3.9+ stdlib only -- no Node, no `pip install`, no network
 - `python3 scripts/lookup_anchor.py <vendor_field_name>` -- ranked XDM target candidates from the field-anchor index. `--reverse <xdm.path>` lists the vendor synonyms that fill a target (top-down authoring); `--related <xdm.path>` lists companion / mirror fields. The index ships under `assets/field_anchors.json`.
 - `python3 scripts/xdm_const_mapper.py --field <xdm.path> --values a,b,c` -- emits the `if()`-chain mapping vendor values to the field's XDM_CONST members (never invents a constant). `--banded` emits the paired severity / log-level chains for a score column.
 - `python3 scripts/mitre_map.py --kind technique --ids T1078,T1059` -- maps MITRE technique / tactic IDs or `--names` to `XDM_CONST.MITRE_*` constants and emits the `arraymap` chain. Validated against the documented MITRE lists; unmapped inputs are reported, not invented.
-- `python3 scripts/lint_rule.py <rule.xql>` -- the rule linter. Structural and parser-conformance checks (ERR-009/010/011/012/013/014/015/016/017/018/024/027, WARN-015/017/018, INFO-012), schema-aware checks read from the references (ERR-020 invented path, WARN-014 quoted XDM_CONST, WARN-035 array-vs-scalar shape, WARN-037 log-level word in severity, WARN-038 missing host.ipv4_addresses companion, WARN-039 whole payload dumped into the description, WARN-040 vendor-anchored syslog header, WARN-041 syslog priority captured but never decoded, WARN-042 authentication-story mandatory set advisory, WARN-043 network-story mandatory set advisory, WARN-044 process / command-execution advisory -- the executable-parent misuse, WARN-045 invented EVENT_TAG outside the closed six-member enum, WARN-046 record-dropping content filter with no catch-all sentinel), dataflow checks over the rule's temps (ERR-019 unused temp, ERR-025 concat-hidden temp; both scoped to `_gc_raw` datasets, where they are a hard block), and the INFO-013 over-mapping advisory (one temp across 3+ entity families). Exits 0 on clean, 1 if any error-severity violation fires. INFO-006 (cleanup stage) is intentionally not emitted -- see the note above.
+- `python3 scripts/lint_rule.py <rule.xql>` -- the rule linter. Structural and parser-conformance checks (ERR-009/010/011/012/013/014/015/016/017/018/024/027, WARN-015/017/018, INFO-012), schema-aware checks read from the references (ERR-020 invented path, WARN-014 quoted XDM_CONST, WARN-035 array-vs-scalar shape, WARN-037 log-level word in severity, WARN-038 missing host.ipv4_addresses companion, WARN-039 whole payload dumped into the description, WARN-040 vendor-anchored syslog header, WARN-041 syslog priority captured but never decoded, WARN-042 authentication-story mandatory set advisory, WARN-043 network-story mandatory set advisory, WARN-044 process / command-execution advisory -- the executable-parent misuse, WARN-045 invented EVENT_TAG outside the closed six-member enum, WARN-046 record-dropping content filter with no catch-all sentinel, WARN-047 prepend-fragile syslog body extraction anchored on `^` / a fixed offset instead of a payload token), dataflow checks over the rule's temps (ERR-019 unused temp, ERR-025 concat-hidden temp; both scoped to `_gc_raw` datasets, where they are a hard block), and the INFO-013 over-mapping advisory (one temp across 3+ entity families). Exits 0 on clean, 1 if any error-severity violation fires. INFO-006 (cleanup stage) is intentionally not emitted -- see the note above.
 - `python3 scripts/verify_rule.py <rule.xql> <sample.json>` -- evaluates the rule against the sample offline and prints the resulting `xdm.*` map per record, so you can confirm behaviour without a tenant. `--expect <expected.json>` diffs against expected output. Unsupported constructs are reported, not guessed.
 
 If the scripts cannot run (no Python available), treat the markdown references as the authoritative checklist: walk [references/parser-idioms.md](references/parser-idioms.md) (ERR-012 through ERR-019, plus idioms (xi) / (xii)), [references/modeling-rules.md](references/modeling-rules.md) (validation checklist), and [references/pitfall-traps.md](references/pitfall-traps.md) before emitting the rule.

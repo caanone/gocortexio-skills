@@ -23,16 +23,21 @@ Python 3.9+ stdlib only.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Iterator, Optional, Set, Tuple
 
 
 SELF_DIR = Path(__file__).resolve().parent
 REFERENCES_DIR = SELF_DIR.parent / "references"
 SCHEMA_PATH = REFERENCES_DIR / "xdm-schema.md"
 CONST_PATH = REFERENCES_DIR / "xdm-const.md"
+# The full ATT&CK constant enum is large, so it ships as a machine-readable
+# asset rather than being enumerated line-by-line in xdm-const.md. The const
+# loader merges it so every documented MITRE constant still validates.
+MITRE_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "mitre_crosswalk.json"
 
 # A schema line is ``  xdm.foo.bar -- TYPE`` with an optional ``(Array)``
 # suffix. The double-dash separator matches the ASCII convention used
@@ -117,6 +122,20 @@ def _schema_const_groups() -> Set[str]:
     return groups
 
 
+def _mitre_crosswalk_consts() -> Iterator[Tuple[str, str]]:
+    """Yield ``(full XDM_CONST member, group)`` for every MITRE technique /
+    tactic constant in the shipped crosswalk asset. Silent no-op if the
+    asset is absent or unreadable."""
+    try:
+        data = json.loads(MITRE_CROSSWALK_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for suffix in (data.get("techniques") or {}).values():
+        yield f"XDM_CONST.{suffix}", "MITRE_TECHNIQUE"
+    for suffix in (data.get("tactics") or {}).values():
+        yield f"XDM_CONST.{suffix}", "MITRE_TACTIC"
+
+
 def load_xdm_consts() -> Dict[str, Set[str]]:
     """Return ``{group: set(full "XDM_CONST.*" members)}`` parsed from
     xdm-const.md. Each member is bucketed into the longest schema group
@@ -151,6 +170,12 @@ def load_xdm_consts() -> Dict[str, Set[str]]:
                 break
         by_group.setdefault(assigned, set()).add(member)
         member_to_group[member] = assigned
+
+    # Merge the authoritative MITRE crosswalk: the full ATT&CK enum lives in
+    # the asset, so any documented technique / tactic constant validates.
+    for member, grp in _mitre_crosswalk_consts():
+        by_group.setdefault(grp, set()).add(member)
+        member_to_group.setdefault(member, grp)
 
     _consts_cache = by_group
     _const_group_cache = member_to_group

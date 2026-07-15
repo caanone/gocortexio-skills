@@ -60,10 +60,18 @@ _DEFAULT_MIN_FREQUENCY = 3
 # on a vendor literal; facility and severity sit in separate alter stages
 # because severity reads the facility temp (a same-stage sibling reference
 # is rejected -- ERR-024). A raw string so the regex backslashes survive.
+#
+# Prepend-robust (HARD RULE for syslog): the same source arrives direct off
+# the box and behind an intermediate relay that prepends its own
+# "<PRI> ts host" header (sometimes two). The greedy "^.*" prefix skips any
+# relay header(s) to the innermost origin header, so host/PRI are the
+# origin's, not the relay's -- and it stays byte-identical on a direct line.
+# Body extraction (Stages 1+) MUST anchor on the payload's own token, never
+# on ^ or a fixed offset, so it too matches both arrival forms.
 _SYSLOG_STAGE0 = r"""| alter
-    _pri        = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
+    _pri        = to_integer(to_number(coalesce(arrayindex(regextract(_raw_log, "^.*<(\d{1,3})>[A-Za-z]{3}\s+\d+\s+[\d:]+"), 0), arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0)))),
     _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
-    _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+    _host_3164  = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
     _syslog_host_raw = coalesce(_host_5424, _host_3164)
 | alter
@@ -523,6 +531,28 @@ def _provenance_lines() -> List[str]:
     ]
 
 
+_SKILL_ISSUES_URL = "https://github.com/gocortexio/skills/issues"
+
+
+def _footer_lines(dataset: str) -> List[str]:
+    """The closing comment sections, in a fixed order so the header is
+    predictable across every generated rule: the REVIEW UNMODELLED query,
+    then the RAISE SKILL ISSUES pointer. Always emitted last (before the
+    [MODEL: ...] body)."""
+    return [
+        "//",
+        "// REVIEW UNMODELLED -- after deploying, list what this rule could",
+        "// not classify, and grow it to cover those records:",
+        f"//   datamodel dataset = {dataset}",
+        '//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"',
+        f"//   | fields xdm.event.original_event_type, {dataset}._raw_log",
+        "//",
+        "// RAISE SKILL ISSUES -- if this rule mis-modelled something, please",
+        "// open an issue and include the REVIEW UNMODELLED output above:",
+        f"//   {_SKILL_ISSUES_URL}",
+    ]
+
+
 def _build_header(
     vendor: str,
     product: str,
@@ -559,11 +589,6 @@ def _build_header(
         '//   xdm.event.original_event_type = "GOCORTEX_UNMODELLED"',
         "// so a datamodel search returns the same row count as the raw",
         "// dataset. See references/record-classification.md.",
-        "//",
-        "// REVIEW UNMODELLED -- after deploying, list what did not classify:",
-        f"//   datamodel dataset = {dataset}",
-        '//   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"',
-        f"//   | fields xdm.event.original_event_type, {dataset}._raw_log",
         "//",
         "// ALERT / EVENT FIELD MAPPING",
         "// ---------------------------",
@@ -624,6 +649,15 @@ def _build_header(
             "the payload severity is parsed, upgrade each to "
             "coalesce(<payload field>, _pri_log_level)."
         )
+        lines.append("//")
+        lines.append(
+            "// HARD RULE (syslog): this source arrives both direct off the "
+            "box and behind a relay that prepends its own <PRI> header. Stage "
+            "0 is already relay-aware (^.*); every payload field you extract "
+            "below MUST anchor on its own token (regextract on key=/[field:]/ "
+            "%MNEMONIC, never on ^ or 'everything after the header') so it "
+            "matches BOTH forms even if the sample showed only one -- WARN-047."
+        )
     if fmt in _POSITIONAL_FORMATS:
         lines.append(
             "//"
@@ -638,6 +672,7 @@ def _build_header(
         lines.append("// TODO / NOT MAPPED")
         lines.extend(todo_rows)
         lines.append("//   _time                        -- Cortex sets _time automatically")
+    lines.extend(_footer_lines(dataset))
     return "\n".join(lines)
 
 

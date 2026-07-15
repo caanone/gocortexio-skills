@@ -194,6 +194,9 @@ filter
 //   datamodel dataset = cisco_tacacs_raw
 //   | filter xdm.event.original_event_type = "GOCORTEX_UNMODELLED"
 //   | fields xdm.event.original_event_type, cisco_tacacs_raw._raw_log
+//
+// RAISE SKILL ISSUES -- report a mis-mapping (include the REVIEW
+// UNMODELLED output above): https://github.com/gocortexio/skills/issues
 ```
 
 ## Key decisions worth copying

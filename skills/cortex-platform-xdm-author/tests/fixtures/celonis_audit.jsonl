@@ -1,0 +1,2 @@
+{"userId":"alice@example.com","userRole":"ADMIN","event":"USER_LOGIN_SUCCESS","timestamp":"2026-02-05T14:30:00.123Z","message":"User signed in","ipAddress":"10.20.30.40","port":"51544","diffPayload":{"oldValue":"","newValue":""}}
+{"userId":"bob@example.com","userRole":"MEMBER","event":"PERMISSION_CHANGED","timestamp":"2026-02-05T14:31:12.900Z","message":"Role updated for space Finance","ipAddress":"10.20.30.41","port":"443","diffPayload":{"oldValue":"VIEWER","newValue":"EDITOR"}}
