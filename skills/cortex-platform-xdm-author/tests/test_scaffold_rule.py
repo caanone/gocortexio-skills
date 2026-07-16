@@ -84,12 +84,12 @@ class TestScaffoldOutput(unittest.TestCase):
     def test_high_confidence_anchor_wired(self):
         rule = _make("sample.kv")
         # src_ip is a strong anchor for xdm.source.ipv4.
-        self.assertIn("xdm.source.ipv4 = _src_ip", rule)
+        self.assertIn("xdm.source.ipv4 = tmp_src_ip", rule)
 
     def test_integer_field_wrapped(self):
         rule = _make("sample.kv")
         # spt -> xdm.source.port (Number) must be wrapped to_integer(to_number()).
-        self.assertIn("xdm.source.port = to_integer(to_number(_spt))", rule)
+        self.assertIn("xdm.source.port = to_integer(to_number(tmp_spt))", rule)
 
     def test_no_duplicate_target(self):
         rule = _make("acmeshield_waf.log", vendor="AcmeShield", product="WAF")
@@ -127,8 +127,8 @@ class TestScaffoldOutput(unittest.TestCase):
         }
         rule = _scaffold.scaffold(ws, "Acme", "Demo", "acme_demo_raw")
         self.assertIn(
-            "xdm.source.host.mac_addresses = if(_mac != null, "
-            "arraycreate(_mac), null)",
+            "xdm.source.host.mac_addresses = if(tmp_mac != null, "
+            "arraycreate(tmp_mac), null)",
             rule,
         )
         errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
@@ -149,12 +149,12 @@ class TestScaffoldSyslogStage0(unittest.TestCase):
         rule = self._rule()
         self.assertIn('regextract(_raw_log, "^<(\\d{1,3})>")', rule)
         self.assertIn(
-            "_syslog_host_raw = coalesce(_host_5424, _host_3164)", rule
+            "tmp_syslog_host_raw = coalesce(tmp_host_5424, tmp_host_3164)", rule
         )
         # NIL-hostname guard: RFC 5424 permits "-" for HOSTNAME; the
         # scaffold nulls it rather than mapping the literal dash.
         self.assertIn(
-            '_syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)',
+            'tmp_syslog_host = if(tmp_syslog_host_raw != "-", tmp_syslog_host_raw)',
             rule,
         )
 
@@ -164,7 +164,7 @@ class TestScaffoldSyslogStage0(unittest.TestCase):
         # prefix so a relay-prepended header is skipped to the origin.
         rule = self._rule()
         self.assertIn(
-            '_host_3164  = arrayindex(regextract(_raw_log, '
+            'tmp_host_3164  = arrayindex(regextract(_raw_log, '
             '"^.*<\\d{1,3}>[A-Za-z]{3}', rule
         )
         # PRI is coalesce(origin-greedy, first) -- the ^<( fallback remains.
@@ -179,18 +179,18 @@ class TestScaffoldSyslogStage0(unittest.TestCase):
         rule = self._rule()
         # Severity reads the facility temp, so they cannot share an alter
         # (ERR-024). The decode must be split across two stages.
-        self.assertIn("_pri_facility = to_integer(divide(_pri, 8))", rule)
+        self.assertIn("tmp_pri_facility = to_integer(divide(tmp_pri, 8))", rule)
         self.assertIn(
-            "_pri_severity = to_integer(subtract(_pri, "
-            "multiply(_pri_facility, 8)))",
+            "tmp_pri_severity = to_integer(subtract(tmp_pri, "
+            "multiply(tmp_pri_facility, 8)))",
             rule,
         )
 
     def test_envelope_drains_present(self):
         rule = self._rule()
-        self.assertIn("xdm.observer.name = _syslog_host", rule)
-        self.assertIn("xdm.event.log_level = _pri_log_level", rule)
-        self.assertIn("xdm.alert.severity = _pri_sev_band", rule)
+        self.assertIn("xdm.observer.name = tmp_syslog_host", rule)
+        self.assertIn("xdm.event.log_level = tmp_pri_log_level", rule)
+        self.assertIn("xdm.alert.severity = tmp_pri_sev_band", rule)
 
     def test_self_gates_clean_including_envelope_lints(self):
         rule = self._rule()
@@ -202,8 +202,8 @@ class TestScaffoldSyslogStage0(unittest.TestCase):
 
     def test_non_syslog_has_no_stage0(self):
         rule = _make("sample.kv")
-        self.assertNotIn("_pri_facility", rule)
-        self.assertNotIn("_syslog_host", rule)
+        self.assertNotIn("tmp_pri_facility", rule)
+        self.assertNotIn("tmp_syslog_host", rule)
 
 
 class TestScaffoldAuthMandatory(unittest.TestCase):
@@ -295,7 +295,7 @@ class TestScaffoldNetworkMandatory(unittest.TestCase):
         # src_ip is wired from the log by the anchor loop; the network pad
         # must not duplicate the target.
         rule = self._rule()
-        self.assertIn("xdm.source.ipv4 = _src_ip", rule)
+        self.assertIn("xdm.source.ipv4 = tmp_src_ip", rule)
         assigns = [ln for ln in rule.splitlines()
                    if ln.strip().startswith("xdm.source.ipv4 =")]
         self.assertEqual(len(assigns), 1, assigns)
@@ -309,8 +309,8 @@ class TestScaffoldNetworkMandatory(unittest.TestCase):
         rule = _make("network_event_syslog.log", vendor="AcmeFW",
                      product="NGFW", dataset="acmefw_ngfw_raw")
         # Stage 0 envelope AND the network block in the same scaffold.
-        self.assertIn("_pri_facility = to_integer(divide(_pri, 8))", rule)
-        self.assertIn("xdm.observer.name = _syslog_host", rule)
+        self.assertIn("tmp_pri_facility = to_integer(divide(tmp_pri, 8))", rule)
+        self.assertIn("xdm.observer.name = tmp_syslog_host", rule)
         self.assertIn(
             "xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK)", rule
         )
@@ -383,15 +383,19 @@ class TestScaffoldProvenanceBlock(unittest.TestCase):
             'GOCORTEX_SKILLS_SKILL_NAME="cortex-platform-xdm-author"',
             'GOCORTEX_SKILLS_SKILL_VERSION="',
             'GOCORTEX_SKILLS_SKILL_WARNING_COUNT="',
+            'GOCORTEX_SKILLS_SOURCE_BASIS="',
         ):
             self.assertIn(key, rule, key)
         # The placeholder must be resolved to a concrete count.
         self.assertNotIn("__PENDING__", rule)
+        # With no reference supplied, the scaffolder defaults to sample-only.
+        self.assertIn('GOCORTEX_SKILLS_SOURCE_BASIS="sample-only"', rule)
 
-    def test_env_overrides_model_and_count(self):
+    def test_env_overrides_model_count_and_basis(self):
         env = dict(os.environ)
         env["GOCORTEX_SKILLS_MODEL"] = "test-model-x"
         env["GOCORTEX_SKILLS_SKILL_WARNING_COUNT"] = "3"
+        env["GOCORTEX_SKILLS_SOURCE_BASIS"] = "spec-backed"
         ws = json.dumps(_worksheet("sample.kv"))
         cp = subprocess.run(
             [sys.executable, str(SCRIPTS / "scaffold_rule.py"), "-",
@@ -401,6 +405,7 @@ class TestScaffoldProvenanceBlock(unittest.TestCase):
         self.assertEqual(cp.returncode, 0, cp.stderr)
         self.assertIn('GOCORTEX_SKILLS_MODEL="test-model-x"', cp.stdout)
         self.assertIn('GOCORTEX_SKILLS_SKILL_WARNING_COUNT="3"', cp.stdout)
+        self.assertIn('GOCORTEX_SKILLS_SOURCE_BASIS="spec-backed"', cp.stdout)
 
 
 if __name__ == "__main__":

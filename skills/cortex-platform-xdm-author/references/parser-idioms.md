@@ -15,12 +15,12 @@ Use the function form for all arithmetic in `alter`: `add()`, `subtract()`, `mul
 
 ```
 // WRONG
-_duration = _end_ms - _start_ms
-_total    = _bytes_in + _bytes_out
+tmp_duration = tmp_end_ms - tmp_start_ms
+tmp_total    = tmp_bytes_in + tmp_bytes_out
 
 // RIGHT
-_duration = subtract(_end_ms, _start_ms)
-_total    = add(_bytes_in, _bytes_out)
+tmp_duration = subtract(tmp_end_ms, tmp_start_ms)
+tmp_total    = add(tmp_bytes_in, tmp_bytes_out)
 ```
 
 ## ERR-013 -- No compound null-guard predicates inside `if()`
@@ -29,13 +29,13 @@ Cortex propagates null through arithmetic and most functions, so the outer guard
 
 ```
 // WRONG
-if(_a != null and _b != null, subtract(_b, _a), null)
-if(_x != null or  _y != null, coalesce(_x, _y), null)
+if(tmp_a != null and tmp_b != null, subtract(tmp_b, tmp_a), null)
+if(tmp_x != null or  tmp_y != null, coalesce(tmp_x, tmp_y), null)
 
 // RIGHT
-subtract(_b, _a)
-coalesce(_x, _y)
-if(_a != null, if(_b != null, subtract(_b, _a), null), null)
+subtract(tmp_b, tmp_a)
+coalesce(tmp_x, tmp_y)
+if(tmp_a != null, if(tmp_b != null, subtract(tmp_b, tmp_a), null), null)
 ```
 
 ## ERR-014 -- No bareword `= true` / `= false` on string-typed columns
@@ -44,22 +44,22 @@ When the source column is genuinely boolean-typed (rare for JSON-string columns)
 
 ```
 // WRONG
-if(_external = true, false, true)               // _external is string-typed
+if(tmp_external = true, false, true)               // tmp_external is string-typed
 
 // RIGHT
-if(_external = "true", false, true)             // quote the literal
-if(to_boolean(_external) = true, false, true)   // cast then compare unquoted
+if(tmp_external = "true", false, true)             // quote the literal
+if(to_boolean(tmp_external) = true, false, true)   // cast then compare unquoted
 ```
 
 ## ERR-015 -- `to_number()` returns float; wrap in `to_integer()` for integer fields
 
 ```
 // WRONG
-xdm.event.duration = to_number(_duration_ms)
+xdm.event.duration = to_number(tmp_duration_ms)
 
 // RIGHT
-xdm.event.duration = to_integer(to_number(_duration_ms))
-xdm.event.duration = to_integer(subtract(to_number(_end_ms), to_number(_start_ms)))
+xdm.event.duration = to_integer(to_number(tmp_duration_ms))
+xdm.event.duration = to_integer(subtract(to_number(tmp_end_ms), to_number(tmp_start_ms)))
 ```
 
 Integer-typed XDM fields that MUST receive `to_integer(to_number(...))`:
@@ -76,11 +76,11 @@ Neither path is in the XDM schema. Fold start/end millisecond pairs into `xdm.ev
 
 ```
 // WRONG
-xdm.event.start_time = _start_ms
-xdm.event.end_time   = _end_ms
+xdm.event.start_time = tmp_start_ms
+xdm.event.end_time   = tmp_end_ms
 
 // RIGHT
-xdm.event.duration   = to_integer(subtract(to_number(_end_ms), to_number(_start_ms)))
+xdm.event.duration   = to_integer(subtract(to_number(tmp_end_ms), to_number(tmp_start_ms)))
 ```
 
 ## ERR-017 -- No struct passthrough inside `arraymap()`
@@ -89,11 +89,11 @@ xdm.event.duration   = to_integer(subtract(to_number(_end_ms), to_number(_start_
 
 ```
 // WRONG -- struct passthrough
-_offenders = arraymap(arrayfilter(participants -> [],
+tmp_offenders = arraymap(arrayfilter(participants -> [],
     "@element" -> role = "offender"), "@element")
 
 // RIGHT -- per-scalar projection
-_offender_object_type = arrayindex(arrayfilter(arraymap(participants -> [],
+tmp_offender_object_type = arrayindex(arrayfilter(arraymap(participants -> [],
     if("@element" -> role = "offender", "@element" -> object_type, null)),
     "@element" != null), 0)
 ```
@@ -116,36 +116,36 @@ arraystring(mitre_tactics -> [], ", ")
 
 ## ERR-019 -- Every underscore temp must reach an `xdm.*` assignment
 
-Every `_var` defined must, through any chain of intermediary assignments, eventually appear on the RHS of an `xdm.*` assignment. Cortex rejects orphans on `_gc_raw` datasets with the message "Data Model Rules contains unused fields" -- this is a hard block, not a warning. The chain may pass through both underscore-prefixed and bare intermediary names, and through multi-line `if()` / `concat()` / `arraymap()` bodies. Before writing the rule, scan every `_var =` and trace it to an `xdm.*` consumer. If you cannot, delete the extraction.
+Every `tmp_var` defined must, through any chain of intermediary assignments, eventually appear on the RHS of an `xdm.*` assignment. Cortex rejects orphans on `_gc_raw` datasets with the message "Data Model Rules contains unused fields" -- this is a hard block, not a warning. The chain may pass through both underscore-prefixed and bare intermediary names, and through multi-line `if()` / `concat()` / `arraymap()` bodies. Before writing the rule, scan every `tmp_var =` and trace it to an `xdm.*` consumer. If you cannot, delete the extraction.
 
 ## (xi) No sibling references inside a single `alter` stage
 
-Cortex evaluates all targets in one `alter` in parallel, so a target cannot read a sibling temp defined in the same stage. The parser reports it as "unknown field `<_var>`". Cross-temp derivations MUST be split across multiple `alter` stages, with later stages referencing only temps from prior stages.
+Cortex evaluates all targets in one `alter` in parallel, so a target cannot read a sibling temp defined in the same stage. The parser reports it as "unknown field `<tmp_var>`". Cross-temp derivations MUST be split across multiple `alter` stages, with later stages referencing only temps from prior stages.
 
 ```
 // WRONG
 | alter
-    _offender_ip       = if(_obj_type = "ipaddr", _obj_val, null),
-    _offender_ipv4_arr = arraycreate(_offender_ip)
+    tmp_offender_ip       = if(tmp_obj_type = "ipaddr", tmp_obj_val, null),
+    tmp_offender_ipv4_arr = arraycreate(tmp_offender_ip)
 
 // RIGHT
 | alter
-    _offender_ip       = if(_obj_type = "ipaddr", _obj_val, null)
+    tmp_offender_ip       = if(tmp_obj_type = "ipaddr", tmp_obj_val, null)
 | alter
-    _offender_ipv4_arr = arraycreate(_offender_ip)
+    tmp_offender_ipv4_arr = arraycreate(tmp_offender_ip)
 ```
 
 ## (xii) `concat()` / `arraystring()` bodies do NOT count toward variable reach
 
-The validator's reach analyser stops at function boundaries. It cannot credit a `_var` whose only consumer is inside a `concat()` / `arraystring()` body. Cortex reports it as "Data Model Rules contains unused fields". Either inline the derivation directly into the `concat()` / `arraystring()` expression, or drain the temp through a bareword identity assignment first.
+The validator's reach analyser stops at function boundaries. It cannot credit a `tmp_var` whose only consumer is inside a `concat()` / `arraystring()` body. Cortex reports it as "Data Model Rules contains unused fields". Either inline the derivation directly into the `concat()` / `arraystring()` expression, or drain the temp through a bareword identity assignment first.
 
 ```
-// WRONG -- _categories_joined reported orphan
-_categories_joined = arraystring(_categories_arr, ", "),
-_description       = concat("Cats: ", _categories_joined)
+// WRONG -- tmp_categories_joined reported orphan
+tmp_categories_joined = arraystring(tmp_categories_arr, ", "),
+tmp_description       = concat("Cats: ", tmp_categories_joined)
 
 // RIGHT -- inline the derivation
-_description = concat("Cats: ", arraystring(_categories_arr, ", "))
+tmp_description = concat("Cats: ", arraystring(tmp_categories_arr, ", "))
 ```
 
 ## INFO-012 -- Cascade root cause: fix the earliest defect first

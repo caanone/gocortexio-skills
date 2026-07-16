@@ -45,7 +45,7 @@ def _embed(snippet: str) -> str:
         "[MODEL: dataset=acme_demo_raw]\n"
         "filter\n    _raw_log != null\n"
         "| alter\n"
-        '    _mitre_ids = json_extract_array(_raw_log, "$.t")\n'
+        '    tmp_mitre_ids = json_extract_array(_raw_log, "$.t")\n'
         "| alter\n"
         '    xdm.observer.vendor = "Acme",\n'
         '    xdm.event.type = "ALERT",\n'
@@ -102,9 +102,9 @@ class TestRenderAndLint(unittest.TestCase):
     def test_array_snippet_lints_clean(self):
         pairs, unmapped = _m.resolve_ids("technique", ["T1078", "T1110"])
         snippet = _m.render(
-            "xdm.alert.mitre_techniques", pairs, "_mitre_ids", True, unmapped
+            "xdm.alert.mitre_techniques", pairs, "tmp_mitre_ids", True, unmapped
         )
-        self.assertIn("arraymap(_mitre_ids, if(", snippet)
+        self.assertIn("arraymap(tmp_mitre_ids, if(", snippet)
         errors = [v for v in _lint.lint(_embed(snippet)) if v["severity"] == "error"]
         self.assertEqual(errors, [], f"{errors}")
 
@@ -115,7 +115,7 @@ class TestRenderAndLint(unittest.TestCase):
 
     def test_render_empty_raises(self):
         with self.assertRaises(ValueError):
-            _m.render("xdm.alert.mitre_techniques", [], "_x", True, ["T9999"])
+            _m.render("xdm.alert.mitre_techniques", [], "tmp_x", True, ["T9999"])
 
 
 class TestCli(unittest.TestCase):
@@ -165,12 +165,12 @@ class TestCrosswalkAndFuzzy(unittest.TestCase):
 
     def test_fuzzy_multi_match_into_array(self):
         verify = _load("verify_rule")
-        chain = _m.render_fuzzy_tactics("xdm.alert.mitre_tactics", "_category")
+        chain = _m.render_fuzzy_tactics("xdm.alert.mitre_tactics", "tmp_category")
         rule = (
             "[MODEL: dataset=acme_demo_raw]\n"
             "filter\n    _raw_log != null\n"
             "| alter\n"
-            '    _category = json_extract_scalar(_raw_log, "$.category")\n'
+            '    tmp_category = json_extract_scalar(_raw_log, "$.category")\n'
             "| alter\n"
             '    xdm.observer.vendor = "Acme",\n'
             '    xdm.event.type = "alert",\n'

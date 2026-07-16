@@ -5,8 +5,8 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _end_ms = to_number(json_extract_scalar(_raw_log, "$.end")),
-    _start_ms = to_number(json_extract_scalar(_raw_log, "$.start"))
+    tmp_end_ms = to_number(json_extract_scalar(_raw_log, "$.end")),
+    tmp_start_ms = to_number(json_extract_scalar(_raw_log, "$.start"))
 | alter
-    xdm.event.duration = _end_ms - _start_ms
+    xdm.event.duration = tmp_end_ms - tmp_start_ms
 ;

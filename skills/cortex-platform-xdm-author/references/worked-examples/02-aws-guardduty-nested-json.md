@@ -99,8 +99,8 @@ For deeply-nested vendor paths (`Resource.AccessKeyDetails.UserName`), the ancho
 
 GuardDuty's parser stamps two anchors that a MODEL rule must NOT read (Cortex rejects a parser-only `_` column as an unknown field, ERR-027):
 
-- `_action_type` -- the 8-value vocabulary (`AWS_API_CALL`, `NETWORK_CONNECTION`, `DNS_REQUEST`, `KUBERNETES_API_CALL`, `PORT_PROBE`, `RDS_LOGIN_ATTEMPT`, `AttackSequence`, `MalwareProtection`). The MODEL derives the action type from the raw `Action.ActionType` shape itself.
-- `_severity_band` -- 3-value bucket (`LOW` <4.0, `MEDIUM` 4.0-6.9, `HIGH` 7.0-8.9). The MODEL drives `xdm.alert.severity` off the numeric `Severity` float (which has its own 4-band vocabulary including `Critical`) and derives the bucketed string from that float, not from any anchor.
+- `tmp_action_type` -- the 8-value vocabulary (`AWS_API_CALL`, `NETWORK_CONNECTION`, `DNS_REQUEST`, `KUBERNETES_API_CALL`, `PORT_PROBE`, `RDS_LOGIN_ATTEMPT`, `AttackSequence`, `MalwareProtection`). The MODEL derives the action type from the raw `Action.ActionType` shape itself.
+- `tmp_severity_band` -- 3-value bucket (`LOW` <4.0, `MEDIUM` 4.0-6.9, `HIGH` 7.0-8.9). The MODEL drives `xdm.alert.severity` off the numeric `Severity` float (which has its own 4-band vocabulary including `Critical`) and derives the bucketed string from that float, not from any anchor.
 
 ## The full rule
 
@@ -146,7 +146,7 @@ alter
     finding_region = coalesce(Region, region),
     finding_severity = to_float(coalesce(Severity, severity)),
     // `finding_severity_band` is derived in full from the numeric
-    // severity. It is NOT lifted from a parser-stamped `_severity_band`
+    // severity. It is NOT lifted from a parser-stamped `tmp_severity_band`
     // anchor: Cortex validates MODEL rules statically against the dataset
     // schema, where parser-only `_` columns are absent, so reading one is
     // rejected as an unknown field before any coalesce() fallback runs
@@ -326,7 +326,7 @@ PORT_PROBE is not the only array. Across the full GuardDuty finding set the foll
 ## Key decisions called out
 
 - PascalCase + camelCase dual-keying. Every read coalesces both forms. Failing to do this means rows from the older event pipeline silently fail to extract.
-- `finding_severity` as float, then banded. AWS gives a 1.0-10.0 float. `xdm.alert.severity` is a categorical string, so the rule bands to `Critical` / `High` / `Medium` / `Low` per the GuardDuty documented bands. The band is derived from the numeric field; the MODEL does not read any parser-stamped `_severity_band` anchor (ERR-027).
+- `finding_severity` as float, then banded. AWS gives a 1.0-10.0 float. `xdm.alert.severity` is a categorical string, so the rule bands to `Critical` / `High` / `Medium` / `Low` per the GuardDuty documented bands. The band is derived from the numeric field; the MODEL does not read any parser-stamped `tmp_severity_band` anchor (ERR-027).
 - Directional resolution via `is_connection_inbound / is_connection_outbound` flags. For `NETWORK_CONNECTION` findings, the same `LocalIp` / `RemoteIp` fields are SOURCE or TARGET depending on direction. For API-call findings, the API caller is always SOURCE. The flags are derived once and re-read across stage 5.
 - `XDM_CONST.IDENTITY_TYPE_*` mapping. Closed-list mapping for the IAM user types. `FederatedUser` -> `VIRTUAL`, `AWSService` -> `MACHINE`, `Root` -> `BUILTIN`. Anything else -> `UNKNOWN`. Speculative additions (`THREAT_CATEGORY_SECURITY`, `CLOUD_PROVIDER_ORACLE`) cause hard validation errors per the closed-list rule in [xdm-const.md](../xdm-const.md).
 - `xdm.source.cloud.provider = XDM_CONST.CLOUD_PROVIDER_AWS` hardcoded -- every GuardDuty finding is AWS by definition.

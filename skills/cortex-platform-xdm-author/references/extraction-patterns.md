@@ -29,17 +29,17 @@ When: `_raw_log` is a JSON string, OR the parser delivers a single top-level col
 
 ```
 alter
-    _<temp_a> = json_extract_scalar(<json_column>, "$.<field_a>"),
-    _<temp_b> = json_extract_scalar(<json_column>, "$.<nested>.<field_b>")
+    tmp_<temp_a> = json_extract_scalar(<json_column>, "$.<field_a>"),
+    tmp_<temp_b> = json_extract_scalar(<json_column>, "$.<nested>.<field_b>")
 | alter
-    <XDM_FIELD_1> = _<temp_a>,
-    <XDM_FIELD_2> = _<temp_b>;
+    <XDM_FIELD_1> = tmp_<temp_a>,
+    <XDM_FIELD_2> = tmp_<temp_b>;
 ```
 
 Always cast non-string columns with `to_string()` before passing to `json_extract_scalar`:
 
 ```
-_field = json_extract_scalar(to_string(<column>), "$.<path>")
+tmp_field = json_extract_scalar(to_string(<column>), "$.<path>")
 ```
 
 ## Pattern B -- Syslog / positional parsing (`split` + `arrayindex`)
@@ -52,13 +52,13 @@ For a syslog source (a `<NNN>` priority token at the start of `_raw_log`), parse
 
 ```
 alter
-    _<inner> = arrayindex(regextract(_raw_log, "<wrapper_regex>"), 0)
+    tmp_<inner> = arrayindex(regextract(_raw_log, "<wrapper_regex>"), 0)
 | alter
-    _parts = split(_<inner>, " ")
+    tmp_parts = split(tmp_<inner>, " ")
 | alter
-    _<field_n> = arrayindex(_parts, <N>)
+    tmp_<field_n> = arrayindex(tmp_parts, <N>)
 | alter
-    <XDM_FIELD> = _<field_n>;
+    <XDM_FIELD> = tmp_<field_n>;
 ```
 
 Rules:
@@ -73,11 +73,11 @@ When: A field contains a JSON-style array of `{label, value}` pairs and the labe
 
 ```
 # string values
-_<temp> = arrayindex(regextract(<source>,
+tmp_<temp> = arrayindex(regextract(<source>,
     "\"<Label Text>\"\s*,\s*\"value\"\s*:\s*\"([^\"]+)\""), 0)
 
 # numeric values
-_<temp> = arrayindex(regextract(<source>,
+tmp_<temp> = arrayindex(regextract(<source>,
     "\"<Label Text>\"\s*,\s*\"value\"\s*:\s*(\d+)"), 0)
 ```
 
@@ -87,10 +87,10 @@ When: `_raw_log` is null and the XSIAM ingestion parser has already broken the e
 
 ```
 alter
-    _<sub_obj> = <column> -> <Key>.<SubKey>{},
-    _<scalar>  = <column> -> <Key>.<Field>
+    tmp_<sub_obj> = <column> -> <Key>.<SubKey>{},
+    tmp_<scalar>  = <column> -> <Key>.<Field>
 | alter
-    <XDM_FIELD> = _<scalar>;
+    <XDM_FIELD> = tmp_<scalar>;
 ```
 
 Note: chained arrows (`a -> b -> c`) are invalid. Use dot notation (`a -> b.c`) or `json_extract_scalar` for deep paths.
@@ -106,26 +106,26 @@ Canonical pattern (verified against the live ExtraHop XDM model rule): project O
 ```
 # DO NOT (parser rejects -- ERR-017)
 alter
-    _chosen = arrayindex(arrayfilter(<array_column> -> [],
+    tmp_chosen = arrayindex(arrayfilter(<array_column> -> [],
         "@element" -> <role_field> = "<role_value>"), 0)
 | alter
-    _field_a = _chosen -> <field_a>;     // struct passthrough -- BLOCKED
+    tmp_field_a = tmp_chosen -> <field_a>;     // struct passthrough -- BLOCKED
 
 # DO (one alter line per scalar; repeat per field)
 alter
-    _<chosen_field_a> = arrayindex(arrayfilter(arraymap(
+    tmp_<chosen_field_a> = arrayindex(arrayfilter(arraymap(
         <array_column> -> [],
         if("@element" -> <role_field> = "<role_value>",
            "@element" -> <field_a>, null)),
         "@element" != null), 0),
-    _<chosen_field_b> = arrayindex(arrayfilter(arraymap(
+    tmp_<chosen_field_b> = arrayindex(arrayfilter(arraymap(
         <array_column> -> [],
         if("@element" -> <role_field> = "<role_value>",
            "@element" -> <field_b>, null)),
         "@element" != null), 0)
 | alter
-    <XDM_FIELD_A> = _<chosen_field_a>,
-    <XDM_FIELD_B> = _<chosen_field_b>;
+    <XDM_FIELD_A> = tmp_<chosen_field_a>,
+    <XDM_FIELD_B> = tmp_<chosen_field_b>;
 ```
 
 Rules:
@@ -142,9 +142,9 @@ When: The log already provides an array of MITRE IDs and you need an array of XD
 
 ```
 alter
-    _<ids> = arraymap(<array_column> -> [], "@element" -> <id_field>)
+    tmp_<ids> = arraymap(<array_column> -> [], "@element" -> <id_field>)
 | alter
-    <XDM_FIELD> = arraymap(_<ids>, if(
+    <XDM_FIELD> = arraymap(tmp_<ids>, if(
         "@element" = "<ID_1>", XDM_CONST.<NAME_1>,
         "@element" = "<ID_2>", XDM_CONST.<NAME_2>));
 ```
@@ -171,10 +171,10 @@ When: A column may hold an IP, a hostname, a username, or a tenant identifier de
 
 ```
 alter
-    _<ip> = if(_<object_type> = "ipaddr", _<object_value>, null)
+    tmp_<ip> = if(tmp_<object_type> = "ipaddr", tmp_<object_value>, null)
 | alter
-    xdm.source.ipv4 = _<ip>,
-    xdm.source.host.ipv4_addresses = if(_<ip> != null, arraycreate(_<ip>), null);
+    xdm.source.ipv4 = tmp_<ip>,
+    xdm.source.host.ipv4_addresses = if(tmp_<ip> != null, arraycreate(tmp_<ip>), null);
 ```
 
 ## Pattern -- Scalar-from-array via arrayindex + arrayfilter
@@ -183,13 +183,13 @@ When: A vendor array (e.g. `categories[]`) needs to populate a scalar XDM_CONST 
 
 ```
 alter
-    _<joined> = arraystring(<array_column>, ", ")
+    tmp_<joined> = arraystring(<array_column>, ", ")
 | alter
     <XDM_SCALAR_FIELD> = arrayindex(arrayfilter(arraymap(<array_column>, if(
         "@element" ~= "(?i)<token_a>", XDM_CONST.<NAME_A>,
         "@element" ~= "(?i)<token_b>", XDM_CONST.<NAME_B>)),
         "@element" != null), 0),
-    xdm.event.description = concat("Categories: ", _<joined>);
+    xdm.event.description = concat("Categories: ", tmp_<joined>);
 ```
 
 ## Anchor pattern -- risk-detection block (banded score + THREAT_CATEGORY scalar + offender/properties.* coalesce)
@@ -200,26 +200,26 @@ The three sub-patterns below MUST appear together; any one missing is a regressi
 
 ```
 alter
-    _risk_score = to_number(risk_score),
-    _categories_arr = categories -> [],
-    _props_username = properties -> username,
-    _offender_username = arrayindex(arrayfilter(arraymap(participants -> [],
+    tmp_risk_score = to_number(risk_score),
+    tmp_categories_arr = categories -> [],
+    tmp_props_username = properties -> username,
+    tmp_offender_username = arrayindex(arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "offender", "@element" -> username, null)),
         "@element" != null), 0)
 | alter
     // (1) banded severity -- NEVER raw to_string() on the score
-    _severity = if(
-        _risk_score >= 80, "Critical",
-        _risk_score >= 50, "High",
-        _risk_score >= 30, "Medium",
-        _risk_score != null, "Low"),
-    _log_level = if(
-        _risk_score >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
-        _risk_score >= 50, XDM_CONST.LOG_LEVEL_ERROR,
-        _risk_score >= 30, XDM_CONST.LOG_LEVEL_WARNING,
-        _risk_score != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
+    tmp_severity = if(
+        tmp_risk_score >= 80, "Critical",
+        tmp_risk_score >= 50, "High",
+        tmp_risk_score >= 30, "Medium",
+        tmp_risk_score != null, "Low"),
+    tmp_log_level = if(
+        tmp_risk_score >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
+        tmp_risk_score >= 50, XDM_CONST.LOG_LEVEL_ERROR,
+        tmp_risk_score >= 30, XDM_CONST.LOG_LEVEL_WARNING,
+        tmp_risk_score != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
     // (2) categorical enum array -> THREAT_CATEGORY scalar (first match)
-    _category_const = arrayindex(arrayfilter(arraymap(_categories_arr, if(
+    tmp_category_const = arrayindex(arrayfilter(arraymap(tmp_categories_arr, if(
         "@element" ~= "(?i)brute",        XDM_CONST.THREAT_CATEGORY_BRUTE_FORCE,
         "@element" ~= "(?i)phish",        XDM_CONST.THREAT_CATEGORY_PHISHING,
         "@element" ~= "(?i)dos|ddos",     XDM_CONST.THREAT_CATEGORY_DOS,
@@ -233,24 +233,24 @@ alter
         "@element" ~= "(?i)protocol",     XDM_CONST.THREAT_CATEGORY_PROTOCOL_ANOMALY)),
         "@element" != null), 0),
     // (3) properties.* identity fallback -- coalesce offender then properties
-    _user_username = coalesce(_offender_username, _props_username)
+    tmp_user_username = coalesce(tmp_offender_username, tmp_props_username)
 | alter
-    xdm.alert.severity = _severity,
-    xdm.event.log_level = _log_level,
-    xdm.alert.category = _category_const,
-    xdm.source.user.username = _user_username,
-    xdm.target.user.username = _user_username;
+    xdm.alert.severity = tmp_severity,
+    xdm.event.log_level = tmp_log_level,
+    xdm.alert.category = tmp_category_const,
+    xdm.source.user.username = tmp_user_username,
+    xdm.target.user.username = tmp_user_username;
 ```
 
 Explicitly rejected anti-patterns:
 
 - `xdm.alert.severity = to_string(risk_score)` -- unbanded raw score.
 - `xdm.alert.subcategory = arraystring(categories -> [], ", ")` as the sole outlet for `categories[]` -- bypasses THREAT_CATEGORY.
-- Dropping `properties.*` with "no XDM sink available" when a `properties.username` (or any `*_username`) is present and the offender username might be null.
+- Dropping `properties.*` with "no XDM sink available" when a `properties.username` (or any `*tmp_username`) is present and the offender username might be null.
 
 ## A note on intermediate variables
 
-Underscore-prefixed temporaries (`_<name>`) are conventional in XDM data model rules. The dataset model layer drops these intermediates naturally at query time -- a `| fields -<temp1>, -<temp2>, ...` cleanup stage is NOT idiomatic in an XDM model rule. That cleanup syntax belongs to parsing rules, where intermediates use the `tmp_*` prefix and must be dropped explicitly. The bundled `lint_rule.py` deliberately omits INFO-006 (missing cleanup stage) for MODEL rules on this basis; ignore that finding if a downstream linter reports it.
+Scratch temporaries use the `tmp_` prefix (`tmp_user`, `tmp_src_ip`, ...). The `_` prefix is reserved by the platform for internal / system-generated fields (`_raw_log`, `_time`, `_message`, ...), so a rule must never CREATE a `_`-prefixed field -- the bundled `lint_rule.py` raises ERR-028 if it does. No explicit `| fields -...` cleanup stage is needed: an XDM MODEL rule surfaces only `xdm.*` fields, so `tmp_` temporaries never reach the datamodel regardless of name. (The linter therefore also omits INFO-006, the missing-cleanup finding; ignore it if a downstream linter reports it.)
 
 ## Category versus subcategory routing
 

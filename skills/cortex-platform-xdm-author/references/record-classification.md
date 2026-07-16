@@ -31,10 +31,10 @@ blank tags rather than a guessed marker:
 
 ```
     xdm.event.tags = if(
-        _is_login != null,   arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-        _is_vpn != null,     arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_VPN, XDM_CONST.EVENT_TAG_NETWORK),
-        _is_flow != null,    arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
-        _is_saas != null,    arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS),
+        tmp_is_login != null,   arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
+        tmp_is_vpn != null,     arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_VPN, XDM_CONST.EVENT_TAG_NETWORK),
+        tmp_is_flow != null,    arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
+        tmp_is_saas != null,    arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS),
         null)
 ```
 
@@ -48,13 +48,13 @@ String, so branch it to the kind each record actually is:
 
 ```
     xdm.event.type = if(
-        _is_flow != null,  "network",
-        _is_cmd != null,   "process",
-        _is_login != null, "authentication",
+        tmp_is_flow != null,  "network",
+        tmp_is_cmd != null,   "process",
+        tmp_is_login != null, "authentication",
         "GOCORTEX_UNMODELLED")
 ```
 
-The discriminator temps (`_is_login`, `_is_flow`, ...) are extracted in
+The discriminator temps (`tmp_is_login`, `tmp_is_flow`, ...) are extracted in
 an earlier `alter` stage from the record's own markers (a `type=` field,
 a `cmd=` token, an action verb, a transport tuple), exactly as the
 worked examples do.
@@ -69,18 +69,18 @@ if()-chains label what they recognise and sentinel the rest:
 filter
     _raw_log != null                       // the ONLY record we drop
 | alter
-    _is_login = ... , _is_flow = ... , _is_cmd = ...   // per-record discriminators
+    tmp_is_login = ... , tmp_is_flow = ... , tmp_is_cmd = ...   // per-record discriminators
 | alter
     xdm.event.type = if(
-        _is_flow != null,  "network",
-        _is_cmd != null,   "process",
-        _is_login != null, "authentication",
+        tmp_is_flow != null,  "network",
+        tmp_is_cmd != null,   "process",
+        tmp_is_login != null, "authentication",
         "GOCORTEX_UNMODELLED"),            // catch-all type
     xdm.event.tags = if(
-        _is_login != null, arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-        _is_flow != null,  arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
+        tmp_is_login != null, arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
+        tmp_is_flow != null,  arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
         null),                             // catch-all: blank tags
-    xdm.event.original_event_type = coalesce(_vendor_event_type, "GOCORTEX_UNMODELLED")
+    xdm.event.original_event_type = coalesce(tmp_vendor_event_type, "GOCORTEX_UNMODELLED")
 ;
 ```
 

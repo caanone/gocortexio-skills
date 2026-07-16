@@ -43,7 +43,7 @@ Positional indices after `Info: ` (zero-indexed, space-delimited):
 
 `_raw_log` is a single space-delimited text string wrapped in a syslog header. Per the decision tree in [extraction-patterns.md](../extraction-patterns.md): `_raw_log` contains syslog/text -> Pattern B.
 
-Two-stage extraction: strip the syslog envelope with `regextract`, then `split(..., " ")` and `arrayindex(_parts, N)` for positional fields. The `to_string()` cast around `arrayindex` outputs is mandatory before passing to a downstream `split` or `regextract` -- without it the parser raises a generic error.
+Two-stage extraction: strip the syslog envelope with `regextract`, then `split(..., " ")` and `arrayindex(tmp_parts, N)` for positional fields. The `to_string()` cast around `arrayindex` outputs is mandatory before passing to a downstream `split` or `regextract` -- without it the parser raises a generic error.
 
 ## Field-anchor lookups
 
@@ -72,10 +72,10 @@ The synonym index covers the well-known fields. Vendor-specific names (`elapsed_
 
 The WSA parser (`parser.xql` in the pack) stamps two anchor columns at ingest:
 
-- `_wsa_http_method` -- HTTP method at position 5, constrained by a closed-vocab regex.
-- `_wsa_decision` -- W3C ACL decision tag, the first hyphen-component of the policy decision string.
+- `tmp_wsa_http_method` -- HTTP method at position 5, constrained by a closed-vocab regex.
+- `tmp_wsa_decision` -- W3C ACL decision tag, the first hyphen-component of the policy decision string.
 
-The MODEL rule must NOT read either column. Cortex validates a MODEL rule statically against the dataset schema, where parser-only `_` columns do not exist, so a bare reference is rejected as "unknown field `_x`" before any `coalesce()` fallback can run (ERR-027). The rule instead derives both values from the raw positional split on its own. You'll see this in stages 2 and 3.5 of the rule below.
+The MODEL rule must NOT read either column. Cortex validates a MODEL rule statically against the dataset schema, where parser-only `_` columns do not exist, so a bare reference is rejected as "unknown field `tmp_x`" before any `coalesce()` fallback can run (ERR-027). The rule instead derives both values from the raw positional split on its own. You'll see this in stages 2 and 3.5 of the rule below.
 
 ## The full rule
 
@@ -96,111 +96,111 @@ The MODEL rule must NOT read either column. Cortex validates a MODEL rule static
 
 // -- Stage 1: Strip syslog wrapper and extract the WSA log portion ----------
 alter
-    _wsa_log = arrayindex(regextract(_raw_log, "Info:\s+(.+)$"), 0),
-    _syslog_fqdn = arrayindex(regextract(_raw_log, ">\w+\s+\d+\s+[\d:]+\s+(\S+)\s+accesslogs"), 0)
+    tmp_wsa_log = arrayindex(regextract(_raw_log, "Info:\s+(.+)$"), 0),
+    tmp_syslog_fqdn = arrayindex(regextract(_raw_log, ">\w+\s+\d+\s+[\d:]+\s+(\S+)\s+accesslogs"), 0)
 
 // -- Stage 2: Split positional fields from the WSA log ----------------------
 | alter
-    _parts = split(_wsa_log, " ")
+    tmp_parts = split(tmp_wsa_log, " ")
 | alter
-    _elapsed_ms = arrayindex(_parts, 1),
-    _client_ip = arrayindex(_parts, 2),
-    _result_status = arrayindex(_parts, 3),
-    _sc_bytes = arrayindex(_parts, 4),
-    // `_http_method` is derived in full from the position-5 split. It is
-    // NOT lifted from a parser-stamped `_wsa_http_method` anchor: Cortex
+    tmp_elapsed_ms = arrayindex(tmp_parts, 1),
+    tmp_client_ip = arrayindex(tmp_parts, 2),
+    tmp_result_status = arrayindex(tmp_parts, 3),
+    tmp_sc_bytes = arrayindex(tmp_parts, 4),
+    // `tmp_http_method` is derived in full from the position-5 split. It is
+    // NOT lifted from a parser-stamped `tmp_wsa_http_method` anchor: Cortex
     // validates MODEL rules statically against the dataset schema, where
     // parser-only `_` columns are absent, so reading one is rejected as an
     // unknown field before any coalesce() fallback runs (ERR-027).
-    _http_method = arrayindex(_parts, 5),
-    _url = arrayindex(_parts, 6),
-    _user_raw = arrayindex(_parts, 7),
-    _hierarchy_raw = arrayindex(_parts, 8),
-    _mime_type = arrayindex(_parts, 9)
+    tmp_http_method = arrayindex(tmp_parts, 5),
+    tmp_url = arrayindex(tmp_parts, 6),
+    tmp_user_raw = arrayindex(tmp_parts, 7),
+    tmp_hierarchy_raw = arrayindex(tmp_parts, 8),
+    tmp_mime_type = arrayindex(tmp_parts, 9)
 
 // -- Stage 3: Decompose composite fields ------------------------------------
 | alter
-    _cache_result = arrayindex(split(to_string(_result_status), "/"), 0),
-    _http_status_str = arrayindex(split(to_string(_result_status), "/"), 1),
-    _peer_host = arrayindex(split(to_string(_hierarchy_raw), "/"), 1),
-    _user_username = if(
-        _user_raw != "-" and _user_raw != null,
-        arrayindex(regextract(to_string(_user_raw), "\\\\([^\"]+)"), 0),
+    tmp_cache_result = arrayindex(split(to_string(tmp_result_status), "/"), 0),
+    tmp_http_status_str = arrayindex(split(to_string(tmp_result_status), "/"), 1),
+    tmp_peer_host = arrayindex(split(to_string(tmp_hierarchy_raw), "/"), 1),
+    tmp_user_username = if(
+        tmp_user_raw != "-" and tmp_user_raw != null,
+        arrayindex(regextract(to_string(tmp_user_raw), "\\\\([^\"]+)"), 0),
         null),
-    _user_domain = if(
-        _user_raw != "-" and _user_raw != null,
-        arrayindex(regextract(to_string(_user_raw), "\"?([^\\\\\"]+)\\\\"), 0),
+    tmp_user_domain = if(
+        tmp_user_raw != "-" and tmp_user_raw != null,
+        arrayindex(regextract(to_string(tmp_user_raw), "\"?([^\\\\\"]+)\\\\"), 0),
         null),
-    _url_host = coalesce(
-        arrayindex(regextract(to_string(_url), "://([^:/]+)"), 0),
-        arrayindex(regextract(to_string(_url), "^([^:/]+)"), 0)),
-    _url_port_str = coalesce(
-        arrayindex(regextract(to_string(_url), "://[^:/]+:(\d+)"), 0),
-        arrayindex(regextract(to_string(_url), "^[^:/]+:(\d+)"), 0)),
-    _acl_tag = arrayindex(regextract(_wsa_log, "ERR:\d+\s+(\S+)\s"), 0),
-    _syslog_short = arrayindex(split(to_string(_syslog_fqdn), "."), 0)
+    tmp_url_host = coalesce(
+        arrayindex(regextract(to_string(tmp_url), "://([^:/]+)"), 0),
+        arrayindex(regextract(to_string(tmp_url), "^([^:/]+)"), 0)),
+    tmp_url_port_str = coalesce(
+        arrayindex(regextract(to_string(tmp_url), "://[^:/]+:(\d+)"), 0),
+        arrayindex(regextract(to_string(tmp_url), "^[^:/]+:(\d+)"), 0)),
+    tmp_acl_tag = arrayindex(regextract(tmp_wsa_log, "ERR:\d+\s+(\S+)\s"), 0),
+    tmp_syslog_short = arrayindex(split(to_string(tmp_syslog_fqdn), "."), 0)
 
 // -- Stage 3.5: Derive the W3C ACL decision tag from raw --------------------
-// `wsa_acl_decision` is derived in full from `_acl_tag`. It is NOT lifted
-// from a parser-stamped `_wsa_decision` anchor (ERR-027).
+// `wsa_acl_decision` is derived in full from `tmp_acl_tag`. It is NOT lifted
+// from a parser-stamped `tmp_wsa_decision` anchor (ERR-027).
 | alter
-    wsa_acl_decision = arrayindex(split(to_string(_acl_tag), "-"), 0)
+    wsa_acl_decision = arrayindex(split(to_string(tmp_acl_tag), "-"), 0)
 
 // -- Stage 4: Map to XDM fields ---------------------------------------------
 | alter
     // Observer -- the WSA appliance that generated this log entry
     xdm.observer.vendor = "Cisco",
     xdm.observer.product = "Secure Web Appliance",
-    xdm.observer.name = _syslog_fqdn,
+    xdm.observer.name = tmp_syslog_fqdn,
 
     // Event -- network transaction metadata
     xdm.event.type = "NETWORK",
     xdm.event.description = concat(
-        _http_method, " ", _url,
-        " | ", _result_status,
-        " | Client: ", _client_ip,
-        if(_user_username != null, concat(" | User: ", _user_username), ""),
-        if(_peer_host != null and _peer_host != "-", concat(" | Upstream: ", _peer_host), "")),
-    xdm.event.duration = to_integer(to_number(_elapsed_ms)),
+        tmp_http_method, " ", tmp_url,
+        " | ", tmp_result_status,
+        " | Client: ", tmp_client_ip,
+        if(tmp_user_username != null, concat(" | User: ", tmp_user_username), ""),
+        if(tmp_peer_host != null and tmp_peer_host != "-", concat(" | Upstream: ", tmp_peer_host), "")),
+    xdm.event.duration = to_integer(to_number(tmp_elapsed_ms)),
     xdm.event.outcome = if(
-        _cache_result = "TCP_MISS" or _cache_result = "TCP_HIT" or _cache_result = "TCP_MEM_HIT" or _cache_result = "TCP_REFRESH_HIT" or _cache_result = "TCP_IMS_HIT" or _cache_result = "TCP_CLIENT_REFRESH_MISS", XDM_CONST.OUTCOME_SUCCESS,
-        _cache_result = "TCP_DENIED", XDM_CONST.OUTCOME_FAILED,
-        _cache_result = "NONE", XDM_CONST.OUTCOME_FAILED,
+        tmp_cache_result = "TCP_MISS" or tmp_cache_result = "TCP_HIT" or tmp_cache_result = "TCP_MEM_HIT" or tmp_cache_result = "TCP_REFRESH_HIT" or tmp_cache_result = "TCP_IMS_HIT" or tmp_cache_result = "TCP_CLIENT_REFRESH_MISS", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_cache_result = "TCP_DENIED", XDM_CONST.OUTCOME_FAILED,
+        tmp_cache_result = "NONE", XDM_CONST.OUTCOME_FAILED,
         wsa_acl_decision ~= "^BLOCK_", XDM_CONST.OUTCOME_FAILED,
         wsa_acl_decision ~= "^ALLOW_", XDM_CONST.OUTCOME_SUCCESS,
         wsa_acl_decision ~= "^MONITOR", XDM_CONST.OUTCOME_SUCCESS,
         wsa_acl_decision = "REDIRECT", XDM_CONST.OUTCOME_SUCCESS,
         XDM_CONST.OUTCOME_UNKNOWN),
-    xdm.event.outcome_reason = _result_status,
+    xdm.event.outcome_reason = tmp_result_status,
 
     // Source -- the client that made the request through the proxy
-    xdm.source.ipv4 = _client_ip,
-    xdm.source.user.username = _user_username,
-    xdm.source.user.domain = _user_domain,
+    xdm.source.ipv4 = tmp_client_ip,
+    xdm.source.user.username = tmp_user_username,
+    xdm.source.user.domain = tmp_user_domain,
 
     // Target -- the upstream destination server
-    xdm.target.host.hostname = if(_peer_host != "-" and _peer_host != null, _peer_host, null),
-    xdm.target.url = _url,
-    xdm.target.port = if(_url_port_str != null, to_integer(to_number(_url_port_str)), null),
-    xdm.target.sent_bytes = to_integer(to_number(_sc_bytes)),
+    xdm.target.host.hostname = if(tmp_peer_host != "-" and tmp_peer_host != null, tmp_peer_host, null),
+    xdm.target.url = tmp_url,
+    xdm.target.port = if(tmp_url_port_str != null, to_integer(to_number(tmp_url_port_str)), null),
+    xdm.target.sent_bytes = to_integer(to_number(tmp_sc_bytes)),
 
     // Network -- HTTP transaction details
-    xdm.network.http.method = _http_method,
-    xdm.network.http.response_code = _http_status_str,
-    xdm.network.http.content_type = if(_mime_type != "-" and _mime_type != null, _mime_type, null),
-    xdm.network.http.url = _url,
-    xdm.network.http.domain = _url_host,
-    xdm.network.rule = _acl_tag,
+    xdm.network.http.method = tmp_http_method,
+    xdm.network.http.response_code = tmp_http_status_str,
+    xdm.network.http.content_type = if(tmp_mime_type != "-" and tmp_mime_type != null, tmp_mime_type, null),
+    xdm.network.http.url = tmp_url,
+    xdm.network.http.domain = tmp_url_host,
+    xdm.network.rule = tmp_acl_tag,
 
     // Intermediate -- the proxy appliance (same device as the observer)
-    xdm.intermediate.host.hostname = _syslog_short,
-    xdm.intermediate.host.fqdn = _syslog_fqdn;
+    xdm.intermediate.host.hostname = tmp_syslog_short,
+    xdm.intermediate.host.fqdn = tmp_syslog_fqdn;
 ```
 
 ## Key decisions called out
 
-- `-` as empty marker. Every Squid-style field uses `-` for "absent". The rule explicitly guards `if(_user_raw != "-" and _user_raw != null, ...)` before mapping. A naive map would put the string `"-"` into `xdm.source.user.username` and downstream queries would match on it.
+- `-` as empty marker. Every Squid-style field uses `-` for "absent". The rule explicitly guards `if(tmp_user_raw != "-" and tmp_user_raw != null, ...)` before mapping. A naive map would put the string `"-"` into `xdm.source.user.username` and downstream queries would match on it.
 - `to_string()` wrap before `split`/`regextract`. Every `arrayindex` output is wrapped before being passed to a downstream string function. Missing the cast produces a generic parser error with no useful line number -- see ERR-018 in [parser-idioms.md](../parser-idioms.md).
 - Cache-result + W3C-decision two-tier outcome. `xdm.event.outcome` first tries to match the cache-result token (`TCP_MISS`, `TCP_DENIED`, etc.); if that doesn't match, it falls back to the W3C ACL decision prefix (`BLOCK_*`, `ALLOW_*`, `MONITOR*`). This is defence-in-depth for the unfamiliar-token case.
-- `xdm.intermediate.*` for the proxy. The WSA appliance is BOTH the observer AND the network intermediate (it sits between source client and target server). Both are mapped from `_syslog_fqdn` / `_syslog_short`.
+- `xdm.intermediate.*` for the proxy. The WSA appliance is BOTH the observer AND the network intermediate (it sits between source client and target server). Both are mapped from `tmp_syslog_fqdn` / `tmp_syslog_short`.
 - NOT MAPPED (implicit -- would go in the MAPPED-header block of a fresh rule): the rest of the ACL tag's seven hyphen-components beyond the decision prefix; the AVC/AMW verdict columns; the W3C free-form audit columns inside `<...>`. They're vendor-specific and have no XDM home.

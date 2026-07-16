@@ -30,7 +30,7 @@ When a field holds ATT&CK ids or canonical names, translate them with
 `scripts/mitre_map.py` and map into the array field:
 
 ```
-python3 scripts/mitre_map.py --kind technique --ids T1078,T1059 --temp _tech
+python3 scripts/mitre_map.py --kind technique --ids T1078,T1059 --temp tmp_tech
 python3 scripts/mitre_map.py --kind tactic    --names "Credential Access,Execution"
 ```
 
@@ -39,7 +39,7 @@ array of the log's ids), resolving each to its constant and dropping
 unknowns:
 
 ```
-    xdm.alert.mitre_techniques = arraymap(_tech, if(
+    xdm.alert.mitre_techniques = arraymap(tmp_tech, if(
         "@element" = "T1078", XDM_CONST.MITRE_TECHNIQUE_VALID_ACCOUNTS,
         "@element" = "T1059", XDM_CONST.MITRE_TECHNIQUE_COMMAND_AND_SCRIPTING_INTERPRETER,
         null))
@@ -57,15 +57,15 @@ Because `xdm.alert.mitre_tactics` is an ARRAY, the match is MULTI-MATCH --
 every tactic whose keywords appear is collected, not first-match-wins:
 
 ```
-python3 scripts/mitre_map.py --fuzzy-tactics --temp _category
+python3 scripts/mitre_map.py --fuzzy-tactics --temp tmp_category
 ```
 
 emits one `if()` per tactic, `arraycreate`-wrapped and `arrayfilter`-pruned:
 
 ```
     xdm.alert.mitre_tactics = arrayfilter(arraycreate(
-        if(lowercase(_category) contains "credential access" or lowercase(_category) contains "credential dumping", XDM_CONST.MITRE_TACTIC_CREDENTIAL_ACCESS, null),
-        if(lowercase(_category) contains "lateral movement", XDM_CONST.MITRE_TACTIC_LATERAL_MOVEMENT, null),
+        if(lowercase(tmp_category) contains "credential access" or lowercase(tmp_category) contains "credential dumping", XDM_CONST.MITRE_TACTIC_CREDENTIAL_ACCESS, null),
+        if(lowercase(tmp_category) contains "lateral movement", XDM_CONST.MITRE_TACTIC_LATERAL_MOVEMENT, null),
         ...one branch per tactic...
     ), "@element" != null)
 ```

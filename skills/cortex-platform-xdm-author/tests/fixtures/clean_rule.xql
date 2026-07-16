@@ -12,20 +12,20 @@
 filter
     _raw_log != null
 | alter
-    _client_ip = json_extract_scalar(_raw_log, "$.client_ip"),
-    _server_port_str = json_extract_scalar(_raw_log, "$.server_port"),
-    _score = to_number(json_extract_scalar(_raw_log, "$.risk_score"))
+    tmp_client_ip = json_extract_scalar(_raw_log, "$.client_ip"),
+    tmp_server_port_str = json_extract_scalar(_raw_log, "$.server_port"),
+    tmp_score = to_number(json_extract_scalar(_raw_log, "$.risk_score"))
 | alter
-    _severity = if(
-        _score >= 80, "Critical",
-        _score >= 50, "High",
-        _score >= 30, "Medium",
-        _score != null, "Low")
+    tmp_severity = if(
+        tmp_score >= 80, "Critical",
+        tmp_score >= 50, "High",
+        tmp_score >= 30, "Medium",
+        tmp_score != null, "Low")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.observer.product = "Demo",
     xdm.event.type = "ALERT",
-    xdm.source.ipv4 = _client_ip,
-    xdm.target.port = to_integer(to_number(_server_port_str)),
-    xdm.alert.severity = _severity
+    xdm.source.ipv4 = tmp_client_ip,
+    xdm.target.port = to_integer(to_number(tmp_server_port_str)),
+    xdm.alert.severity = tmp_severity
 ;

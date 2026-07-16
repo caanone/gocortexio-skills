@@ -9,11 +9,11 @@
 filter
     _raw_log != null
 | alter
-    _pri  = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
-    _host = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+    tmp_pri  = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
+    tmp_host = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
     xdm.observer.vendor = "CortexGrid",
     xdm.event.type = "ALERT",
-    xdm.observer.name = _host,
-    xdm.event.id = to_string(_pri)
+    xdm.observer.name = tmp_host,
+    xdm.event.id = to_string(tmp_pri)
 ;

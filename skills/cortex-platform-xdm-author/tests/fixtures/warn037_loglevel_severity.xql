@@ -10,12 +10,12 @@
 filter
     _raw_log != null
 | alter
-    _level = json_extract_scalar(_raw_log, "$.level")
+    tmp_level = json_extract_scalar(_raw_log, "$.level")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.event.type = "ALERT",
     xdm.alert.severity = if(
-        _level = "warning", "Warning",
-        _level = "error", "Error",
-        _level != null, _level)
+        tmp_level = "warning", "Warning",
+        tmp_level = "error", "Error",
+        tmp_level != null, tmp_level)
 ;

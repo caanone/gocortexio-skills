@@ -9,11 +9,11 @@
 filter
     _raw_log != null
 | alter
-    _asset = json_extract_scalar(_raw_log, "$.asset"),
-    _dst = json_extract_scalar(_raw_log, "$.dst")
+    tmp_asset = json_extract_scalar(_raw_log, "$.asset"),
+    tmp_dst = json_extract_scalar(_raw_log, "$.dst")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.event.type = "ALERT",
-    xdm.target.ipv4 = _dst,
-    xdm.target.host.hostname = _asset
+    xdm.target.ipv4 = tmp_dst,
+    xdm.target.host.hostname = tmp_asset
 ;

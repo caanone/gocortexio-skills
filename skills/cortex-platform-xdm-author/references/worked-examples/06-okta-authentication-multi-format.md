@@ -62,63 +62,63 @@ Note the gaps: Okta logs no source port and no target IP / port. Those mandatory
 filter
     _raw_log != null
 | alter
-    _event = json_extract_scalar(_raw_log, "$.eventType"),
-    _result = json_extract_scalar(_raw_log, "$.outcome.result"),
-    _upn = json_extract_scalar(_raw_log, "$.actor.alternateId"),
-    _display_name = json_extract_scalar(_raw_log, "$.actor.displayName"),
-    _src_ip = json_extract_scalar(_raw_log, "$.client.ipAddress"),
-    _user_agent = json_extract_scalar(_raw_log, "$.client.userAgent.rawUserAgent"),
-    _os = json_extract_scalar(_raw_log, "$.client.userAgent.os"),
-    _city = json_extract_scalar(_raw_log, "$.client.geographicalContext.city"),
-    _country = json_extract_scalar(_raw_log, "$.client.geographicalContext.country"),
-    _session = json_extract_scalar(_raw_log, "$.authenticationContext.externalSessionId"),
-    _factor = json_extract_scalar(_raw_log, "$.authenticationContext.credentialType"),
-    _app_id = json_extract_scalar(_raw_log, "$.target[0].id"),
-    _app_name = json_extract_scalar(_raw_log, "$.target[0].displayName")
+    tmp_event = json_extract_scalar(_raw_log, "$.eventType"),
+    tmp_result = json_extract_scalar(_raw_log, "$.outcome.result"),
+    tmp_upn = json_extract_scalar(_raw_log, "$.actor.alternateId"),
+    tmp_display_name = json_extract_scalar(_raw_log, "$.actor.displayName"),
+    tmp_src_ip = json_extract_scalar(_raw_log, "$.client.ipAddress"),
+    tmp_user_agent = json_extract_scalar(_raw_log, "$.client.userAgent.rawUserAgent"),
+    tmp_os = json_extract_scalar(_raw_log, "$.client.userAgent.os"),
+    tmp_city = json_extract_scalar(_raw_log, "$.client.geographicalContext.city"),
+    tmp_country = json_extract_scalar(_raw_log, "$.client.geographicalContext.country"),
+    tmp_session = json_extract_scalar(_raw_log, "$.authenticationContext.externalSessionId"),
+    tmp_factor = json_extract_scalar(_raw_log, "$.authenticationContext.credentialType"),
+    tmp_app_id = json_extract_scalar(_raw_log, "$.target[0].id"),
+    tmp_app_name = json_extract_scalar(_raw_log, "$.target[0].displayName")
 
 // -- Stage 2: Map to XDM (identical to the syslog rule below) ---------------
 | alter
     xdm.observer.vendor = "Okta",
     xdm.observer.product = "Identity Cloud",
     // Mandatory authentication-story set (references/authentication-mapping.md)
-    xdm.event.type = if(_event != null, "authentication", "GOCORTEX_UNMODELLED"),
+    xdm.event.type = if(tmp_event != null, "authentication", "GOCORTEX_UNMODELLED"),
     xdm.event.tags = if(
-        _event != null,
+        tmp_event != null,
         arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS),
         null),
-    xdm.event.original_event_type = coalesce(_event, "GOCORTEX_UNMODELLED"),
+    xdm.event.original_event_type = coalesce(tmp_event, "GOCORTEX_UNMODELLED"),
     xdm.event.operation = if(
-        _factor != null and _factor != "PASSWORD", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
-        _event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
+        tmp_factor != null and tmp_factor != "PASSWORD", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
+        tmp_event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
     xdm.event.outcome = if(
-        _result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
-        _result != null, XDM_CONST.OUTCOME_FAILED),
+        tmp_result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = "SSO",
-    xdm.source.user.upn = _upn,
+    xdm.source.user.upn = tmp_upn,
     xdm.source.user.identity_type = if(
-        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        tmp_upn != null, XDM_CONST.IDENTITY_TYPE_USER,
         XDM_CONST.IDENTITY_TYPE_UNKNOWN),
     xdm.source.user.user_type = if(
-        _upn = null, XDM_CONST.USER_TYPE_REGULAR,
-        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_.]|service|gserviceaccount",
+        tmp_upn = null, XDM_CONST.USER_TYPE_REGULAR,
+        tmp_upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(tmp_upn) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
-    xdm.source.ipv4 = _src_ip,
+    xdm.source.ipv4 = tmp_src_ip,
     xdm.source.port = to_integer(0),
     xdm.target.ipv4 = "",
     xdm.target.port = to_integer(0),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP,
     // Optional enrichment (map when present, omit otherwise)
-    xdm.source.user.username = _display_name,
-    xdm.source.user_agent = _user_agent,
-    xdm.source.host.os = _os,
-    xdm.source.host.os_family = if(_os ~= "[Ww]indows", XDM_CONST.OS_FAMILY_WINDOWS),
-    xdm.source.location.city = _city,
-    xdm.source.location.country = _country,
-    xdm.target.resource.id = _app_id,
-    xdm.target.resource.name = _app_name,
-    xdm.session_context_id = _session
+    xdm.source.user.username = tmp_display_name,
+    xdm.source.user_agent = tmp_user_agent,
+    xdm.source.host.os = tmp_os,
+    xdm.source.host.os_family = if(tmp_os ~= "[Ww]indows", XDM_CONST.OS_FAMILY_WINDOWS),
+    xdm.source.location.city = tmp_city,
+    xdm.source.location.country = tmp_country,
+    xdm.target.resource.id = tmp_app_id,
+    xdm.target.resource.name = tmp_app_name,
+    xdm.session_context_id = tmp_session
 ;
 // REVIEW UNMODELLED -- list records this rule could not classify:
 //   datamodel dataset = okta_systemlog_json_raw
@@ -148,65 +148,65 @@ This is Pattern B (syslog-wrapped): the priority / version / timestamp / host / 
 
 // -- Stage 1: Strip the RFC 5424 header, recover the JSON body --------------
 alter
-    _body = arrayindex(regextract(_raw_log, "(\{.*\})\s*$"), 0)
+    tmp_body = arrayindex(regextract(_raw_log, "(\{.*\})\s*$"), 0)
 
 // -- Stage 2: Extract from the recovered JSON ------------------------------
 | alter
-    _event = json_extract_scalar(_body, "$.eventType"),
-    _result = json_extract_scalar(_body, "$.outcome.result"),
-    _upn = json_extract_scalar(_body, "$.actor.alternateId"),
-    _display_name = json_extract_scalar(_body, "$.actor.displayName"),
-    _src_ip = json_extract_scalar(_body, "$.client.ipAddress"),
-    _user_agent = json_extract_scalar(_body, "$.client.userAgent.rawUserAgent"),
-    _os = json_extract_scalar(_body, "$.client.userAgent.os"),
-    _city = json_extract_scalar(_body, "$.client.geographicalContext.city"),
-    _country = json_extract_scalar(_body, "$.client.geographicalContext.country"),
-    _session = json_extract_scalar(_body, "$.authenticationContext.externalSessionId"),
-    _factor = json_extract_scalar(_body, "$.authenticationContext.credentialType"),
-    _app_id = json_extract_scalar(_body, "$.target[0].id"),
-    _app_name = json_extract_scalar(_body, "$.target[0].displayName")
+    tmp_event = json_extract_scalar(tmp_body, "$.eventType"),
+    tmp_result = json_extract_scalar(tmp_body, "$.outcome.result"),
+    tmp_upn = json_extract_scalar(tmp_body, "$.actor.alternateId"),
+    tmp_display_name = json_extract_scalar(tmp_body, "$.actor.displayName"),
+    tmp_src_ip = json_extract_scalar(tmp_body, "$.client.ipAddress"),
+    tmp_user_agent = json_extract_scalar(tmp_body, "$.client.userAgent.rawUserAgent"),
+    tmp_os = json_extract_scalar(tmp_body, "$.client.userAgent.os"),
+    tmp_city = json_extract_scalar(tmp_body, "$.client.geographicalContext.city"),
+    tmp_country = json_extract_scalar(tmp_body, "$.client.geographicalContext.country"),
+    tmp_session = json_extract_scalar(tmp_body, "$.authenticationContext.externalSessionId"),
+    tmp_factor = json_extract_scalar(tmp_body, "$.authenticationContext.credentialType"),
+    tmp_app_id = json_extract_scalar(tmp_body, "$.target[0].id"),
+    tmp_app_name = json_extract_scalar(tmp_body, "$.target[0].displayName")
 
 // -- Stage 3: Map to XDM (byte-for-byte identical to the JSON rule) ---------
 | alter
     xdm.observer.vendor = "Okta",
     xdm.observer.product = "Identity Cloud",
-    xdm.event.type = if(_event != null, "authentication", "GOCORTEX_UNMODELLED"),
+    xdm.event.type = if(tmp_event != null, "authentication", "GOCORTEX_UNMODELLED"),
     xdm.event.tags = if(
-        _event != null,
+        tmp_event != null,
         arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS),
         null),
-    xdm.event.original_event_type = coalesce(_event, "GOCORTEX_UNMODELLED"),
+    xdm.event.original_event_type = coalesce(tmp_event, "GOCORTEX_UNMODELLED"),
     xdm.event.operation = if(
-        _factor != null and _factor != "PASSWORD", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
-        _event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
+        tmp_factor != null and tmp_factor != "PASSWORD", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
+        tmp_event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
     xdm.event.outcome = if(
-        _result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
-        _result != null, XDM_CONST.OUTCOME_FAILED),
+        tmp_result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = "SSO",
-    xdm.source.user.upn = _upn,
+    xdm.source.user.upn = tmp_upn,
     xdm.source.user.identity_type = if(
-        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        tmp_upn != null, XDM_CONST.IDENTITY_TYPE_USER,
         XDM_CONST.IDENTITY_TYPE_UNKNOWN),
     xdm.source.user.user_type = if(
-        _upn = null, XDM_CONST.USER_TYPE_REGULAR,
-        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_.]|service|gserviceaccount",
+        tmp_upn = null, XDM_CONST.USER_TYPE_REGULAR,
+        tmp_upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(tmp_upn) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
-    xdm.source.ipv4 = _src_ip,
+    xdm.source.ipv4 = tmp_src_ip,
     xdm.source.port = to_integer(0),
     xdm.target.ipv4 = "",
     xdm.target.port = to_integer(0),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP,
-    xdm.source.user.username = _display_name,
-    xdm.source.user_agent = _user_agent,
-    xdm.source.host.os = _os,
-    xdm.source.host.os_family = if(_os ~= "[Ww]indows", XDM_CONST.OS_FAMILY_WINDOWS),
-    xdm.source.location.city = _city,
-    xdm.source.location.country = _country,
-    xdm.target.resource.id = _app_id,
-    xdm.target.resource.name = _app_name,
-    xdm.session_context_id = _session
+    xdm.source.user.username = tmp_display_name,
+    xdm.source.user_agent = tmp_user_agent,
+    xdm.source.host.os = tmp_os,
+    xdm.source.host.os_family = if(tmp_os ~= "[Ww]indows", XDM_CONST.OS_FAMILY_WINDOWS),
+    xdm.source.location.city = tmp_city,
+    xdm.source.location.country = tmp_country,
+    xdm.target.resource.id = tmp_app_id,
+    xdm.target.resource.name = tmp_app_name,
+    xdm.session_context_id = tmp_session
 ;
 // REVIEW UNMODELLED -- list records this rule could not classify:
 //   datamodel dataset = okta_systemlog_syslog_raw
@@ -223,6 +223,6 @@ alter
 - All 14 mandatory fields are mapped in both rules, so the authentication story is created from either feed. WARN-042 stays silent on both because nothing mandatory is missing. This includes the two `xdm.source.user` account-class fields: `identity_type` (`IDENTITY_TYPE_USER` for a real principal) and `user_type` (defaulting to `USER_TYPE_REGULAR`, with the `$` / `svc_` / `service` conventions catching machine and service accounts).
 - Placeholders are real, not omissions. Okta logs no source port and no target IP / port, so `xdm.source.port` and `xdm.target.port` take `to_integer(0)` and `xdm.target.ipv4` takes the empty string `""`. Per [authentication-mapping.md](../authentication-mapping.md), a mandatory field must be present even when the source has no value -- dropping it would drop the event from the story.
 - `xdm.source.user.upn`, not `username`. The mandatory correlation key is the UPN (`actor.alternateId`). The human-readable `actor.displayName` is mapped to the optional `xdm.source.user.username`; the two are never substituted for each other.
-- `xdm.event.type` contains `authentication`. The story keys on this substring, not on a `"AUTH"` category label. The classifier guards on `_event != null`; a malformed row resolves to the `"GOCORTEX_UNMODELLED"` sentinel (with blank tags) rather than a false-positive auth event, and is discoverable via the REVIEW UNMODELLED query.
+- `xdm.event.type` contains `authentication`. The story keys on this substring, not on a `"AUTH"` category label. The classifier guards on `tmp_event != null`; a malformed row resolves to the `"GOCORTEX_UNMODELLED"` sentinel (with blank tags) rather than a false-positive auth event, and is discoverable via the REVIEW UNMODELLED query.
 - Tags are per record and multi-valued. A recognised login carries `arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_SAAS)` -- authentication because it is a credential validation, SAAS because Okta is a SaaS identity provider -- from the closed six-member `EVENT_TAG` enum. An unrecognised record's tag if-chain ends with `null`, so it stays blank.
 - `xdm.event.operation` follows the credential type. `PASSWORD` maps to `OPERATION_TYPE_AUTH_LOGIN`; any other credential type (a second factor) maps to `OPERATION_TYPE_AUTH_MFA`. `xdm.auth.service = "SSO"` is the authentication service name -- Okta is an SSO service. (It is the service NAME, not an "SP"/"IDP" role; those values do not exist in XDM.)

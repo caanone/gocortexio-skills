@@ -14,17 +14,17 @@
 filter
     _raw_log != null
 | alter
-    _user = json_extract_scalar(_raw_log, "$.user"),
-    _src = json_extract_scalar(_raw_log, "$.src_ip"),
-    _result = json_extract_scalar(_raw_log, "$.result")
+    tmp_user = json_extract_scalar(_raw_log, "$.user"),
+    tmp_src = json_extract_scalar(_raw_log, "$.src_ip"),
+    tmp_result = json_extract_scalar(_raw_log, "$.result")
 | alter
     xdm.event.type = "authentication",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
     xdm.source.user.upn = if(
-        _user contains "@", _user,
-        _user != null, concat(_user, "@localhost")),
-    xdm.source.ipv4 = _src,
+        tmp_user contains "@", tmp_user,
+        tmp_user != null, concat(tmp_user, "@localhost")),
+    xdm.source.ipv4 = tmp_src,
     xdm.event.outcome = if(
-        _result = "success", XDM_CONST.OUTCOME_SUCCESS,
-        _result != null, XDM_CONST.OUTCOME_FAILED)
+        tmp_result = "success", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_result != null, XDM_CONST.OUTCOME_FAILED)
 ;

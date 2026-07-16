@@ -71,7 +71,7 @@ The command / image usually arrives under one of these vendor names
 path.
 
 Numeric fields (`pid`, `parent_id` is a String) follow the usual
-coercion: `xdm.source.process.pid = to_integer(to_number(_pid))`.
+coercion: `xdm.source.process.pid = to_integer(to_number(tmp_pid))`.
 
 ## AAA / network-device command accounting
 
@@ -127,16 +127,16 @@ closed-list member fits.
 filter
     _raw_log != null
 | alter
-    _user = json_extract_scalar(_raw_log, "$.user"),
-    _img = json_extract_scalar(_raw_log, "$.image"),
-    _cmd = json_extract_scalar(_raw_log, "$.command_line"),
-    _pid = json_extract_scalar(_raw_log, "$.pid")
+    tmp_user = json_extract_scalar(_raw_log, "$.user"),
+    tmp_img = json_extract_scalar(_raw_log, "$.image"),
+    tmp_cmd = json_extract_scalar(_raw_log, "$.command_line"),
+    tmp_pid = json_extract_scalar(_raw_log, "$.pid")
 | alter
     xdm.event.type = "process creation",
-    xdm.source.user.username = _user,
-    xdm.source.process.executable.path = _img,
-    xdm.source.process.command_line = _cmd,
-    xdm.source.process.pid = to_integer(to_number(_pid)),
-    xdm.event.description = concat("process ", _cmd, " by ", _user)
+    xdm.source.user.username = tmp_user,
+    xdm.source.process.executable.path = tmp_img,
+    xdm.source.process.command_line = tmp_cmd,
+    xdm.source.process.pid = to_integer(to_number(tmp_pid)),
+    xdm.event.description = concat("process ", tmp_cmd, " by ", tmp_user)
 ;
 ```

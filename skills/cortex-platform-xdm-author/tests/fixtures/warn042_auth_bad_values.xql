@@ -18,16 +18,16 @@
 filter
     _raw_log != null
 | alter
-    _user = json_extract_scalar(_raw_log, "$.user"),
-    _action = json_extract_scalar(_raw_log, "$.action")
+    tmp_user = json_extract_scalar(_raw_log, "$.user"),
+    tmp_action = json_extract_scalar(_raw_log, "$.action")
 | alter
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
     xdm.event.type = "login",
     xdm.event.operation = XDM_CONST.OPERATION_TYPE_CREATE,
-    xdm.event.original_event_type = _action,
+    xdm.event.original_event_type = tmp_action,
     xdm.event.outcome = XDM_CONST.OUTCOME_UNKNOWN,
     xdm.auth.service = "IDP",
-    xdm.source.user.upn = _user,
+    xdm.source.user.upn = tmp_user,
     xdm.source.user.identity_type = XDM_CONST.IDENTITY_TYPE_USER,
     xdm.source.user.user_type = XDM_CONST.USER_TYPE_REGULAR,
     xdm.source.ipv4 = "203.0.113.9",

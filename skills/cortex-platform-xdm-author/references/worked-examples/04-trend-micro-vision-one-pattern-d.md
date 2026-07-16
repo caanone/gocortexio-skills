@@ -102,8 +102,8 @@ The well-named fields (`processName`, `spt`, `dpt`, `sha256`) hit the synonym in
 
 Vision One's shared parser stamps two anchors that a MODEL rule must NOT read (Cortex rejects a parser-only `_` column as an unknown field, ERR-027):
 
-- `_source` -- the source discriminator (`workbenchAlert` vs `detections`); the MODEL takes the value from the top-level `source` column directly.
-- `_severity_band` -- bucketed from `filterRiskLevel`, used by `xdm.alert.severity`. The MODEL derives it via the if-chain over `filterRiskLevel` itself.
+- `tmp_source` -- the source discriminator (`workbenchAlert` vs `detections`); the MODEL takes the value from the top-level `source` column directly.
+- `tmp_severity_band` -- bucketed from `filterRiskLevel`, used by `xdm.alert.severity`. The MODEL derives it via the if-chain over `filterRiskLevel` itself.
 
 ## The full rule
 
@@ -140,15 +140,15 @@ filter
     detection_filter_risk_level = detail -> filterRiskLevel,
     detection_engine_operation = detail -> engineOperation
 
-// -- Stage 1.5: Derive `_source` and `_severity_band` from raw -------------
+// -- Stage 1.5: Derive `tmp_source` and `tmp_severity_band` from raw -------------
 // Both are derived in full from raw columns here. Neither is lifted from a
-// parser-stamped `_source` / `_severity_band` anchor: Cortex validates
+// parser-stamped `tmp_source` / `tmp_severity_band` anchor: Cortex validates
 // MODEL rules statically against the dataset schema, where parser-only `_`
 // columns are absent, so reading one is rejected as an unknown field before
 // any coalesce() fallback runs (ERR-027).
 | alter
-    _source = source,
-    _severity_band = if(
+    tmp_source = source,
+    tmp_severity_band = if(
         detection_filter_risk_level = "critical", "CRITICAL",
         detection_filter_risk_level = "high", "HIGH",
         detection_filter_risk_level = "medium", "MEDIUM",
@@ -257,7 +257,7 @@ filter
 
     xdm.event.id = detection_uuid,
     xdm.event.type = "ALERT",
-    xdm.event.original_event_type = _source,
+    xdm.event.original_event_type = tmp_source,
     xdm.event.description = detection_event_name,
     xdm.event.operation_sub_type = detection_engine_operation,
     xdm.event.log_level = if(
@@ -277,10 +277,10 @@ filter
     xdm.alert.name = filter_names,
     xdm.alert.description = filter_descriptions,
     xdm.alert.severity = coalesce(
-        if(_severity_band = "CRITICAL", "Critical",
-           _severity_band = "HIGH", "High",
-           _severity_band = "MEDIUM", "Medium",
-           _severity_band = "LOW", "Low"),
+        if(tmp_severity_band = "CRITICAL", "Critical",
+           tmp_severity_band = "HIGH", "High",
+           tmp_severity_band = "MEDIUM", "Medium",
+           tmp_severity_band = "LOW", "Low"),
         if(detection_filter_risk_level = "info", "Informational",
            detection_filter_risk_level != null, detection_filter_risk_level)),
     xdm.alert.category = detection_event_name,

@@ -18,7 +18,7 @@ The arrow operator (Pattern D) and `json_extract_scalar` (Pattern A) return stri
 - PID: `xdm.source.process.pid`, `xdm.target.process.pid`
 
 ```
-_src_port = to_integer(Source -> Port)
+tmp_src_port = to_integer(Source -> Port)
 ```
 
 Critical: `to_number()` returns a float. Integer-typed XDM fields MUST be wrapped in `to_integer(to_number(...))` -- see [parser-idioms.md](parser-idioms.md) ERR-015.
@@ -40,32 +40,32 @@ When you map one field of a pair, always map the other:
 
 ## String passthrough fallback (mandatory for vendor-text fields)
 
-Every categorical `if()`-chain that assigns to a free-String XDM field carrying vendor text MUST end with a `_field != null, _field` passthrough, so an unmapped vendor value is preserved rather than silently nulled. Without the passthrough, any value your branches did not anticipate vanishes, and the gap only surfaces in production when an analyst notices the field is empty.
+Every categorical `if()`-chain that assigns to a free-String XDM field carrying vendor text MUST end with a `tmp_field != null, tmp_field` passthrough, so an unmapped vendor value is preserved rather than silently nulled. Without the passthrough, any value your branches did not anticipate vanishes, and the gap only surfaces in production when an analyst notices the field is empty.
 
 ```
 // WRONG -- unmapped vendor actions are silently dropped
 xdm.observer.action = if(
-    _action = "ALLOW", "allow",
-    _action = "BLOCK", "block")
+    tmp_action = "ALLOW", "allow",
+    tmp_action = "BLOCK", "block")
 
 // RIGHT -- the passthrough preserves anything not explicitly mapped
 xdm.observer.action = if(
-    _action = "ALLOW", "allow",
-    _action = "BLOCK", "block",
-    _action != null,   _action)
+    tmp_action = "ALLOW", "allow",
+    tmp_action = "BLOCK", "block",
+    tmp_action != null,   tmp_action)
 ```
 
 This applies to free-String fields that carry the vendor's own text, such as `xdm.alert.subcategory`, `xdm.observer.action`, `xdm.alert.original_threat_name`, `xdm.event.outcome_reason`. Two exceptions:
 
 - Closed-list `XDM_CONST` targets (`xdm.event.outcome`, `xdm.alert.category`, `xdm.network.http.method`, and the rest in the XDM_CONST-required table below) keep OMITTING the default branch, so an unmatched value resolves to null. A raw string would break the enum type.
-- Band-vocabulary String fields like `xdm.alert.severity` floor to a band (`_field != null, "Low"`) or omit the default; they NEVER echo the raw value, because an arbitrary string is not a valid band (see the log-level vocabulary rule).
+- Band-vocabulary String fields like `xdm.alert.severity` floor to a band (`tmp_field != null, "Low"`) or omit the default; they NEVER echo the raw value, because an arbitrary string is not a valid band (see the log-level vocabulary rule).
 
 ## Array field construction
 
 Array-typed XDM fields (marked `(Array)` in [xdm-schema.md](xdm-schema.md)) MUST use `arraycreate()`. Always null-guard:
 
 ```
-if(_value != null, arraycreate(_value), null)
+if(tmp_value != null, arraycreate(tmp_value), null)
 ```
 
 Common array fields:
@@ -79,18 +79,18 @@ Multi-IP pattern (coalesce + arraycreate together):
 
 ```
 | alter
-    _src_ip     = Source -> IP,
-    _src_alt_ip = Source -> AlternateIP
+    tmp_src_ip     = Source -> IP,
+    tmp_src_alt_ip = Source -> AlternateIP
 | alter
-    _resolved_src_ip = coalesce(_src_ip, _src_alt_ip)
+    tmp_resolved_src_ip = coalesce(tmp_src_ip, tmp_src_alt_ip)
 | alter
-    xdm.source.ipv4               = _resolved_src_ip,
-    xdm.source.host.ipv4_addresses = if(_resolved_src_ip != null,
-                                        arraycreate(_resolved_src_ip),
+    xdm.source.ipv4               = tmp_resolved_src_ip,
+    xdm.source.host.ipv4_addresses = if(tmp_resolved_src_ip != null,
+                                        arraycreate(tmp_resolved_src_ip),
                                         null)
 ```
 
-`_src_alt_ip` is consumed by the `coalesce`, so it is not an unused temp.
+`tmp_src_alt_ip` is consumed by the `coalesce`, so it is not an unused temp.
 
 ## XDM_CONST-required fields
 
@@ -113,14 +113,14 @@ These fields MUST use XDM_CONST enum values via `if()` chains, never raw strings
 
 ```
 // WRONG
-xdm.network.http.method = _http_method
+xdm.network.http.method = tmp_http_method
 
 // RIGHT
 xdm.network.http.method = if(
-    _http_method = "GET",    XDM_CONST.HTTP_METHOD_GET,
-    _http_method = "POST",   XDM_CONST.HTTP_METHOD_POST,
-    _http_method = "PUT",    XDM_CONST.HTTP_METHOD_PUT,
-    _http_method = "DELETE", XDM_CONST.HTTP_METHOD_DELETE)
+    tmp_http_method = "GET",    XDM_CONST.HTTP_METHOD_GET,
+    tmp_http_method = "POST",   XDM_CONST.HTTP_METHOD_POST,
+    tmp_http_method = "PUT",    XDM_CONST.HTTP_METHOD_PUT,
+    tmp_http_method = "DELETE", XDM_CONST.HTTP_METHOD_DELETE)
 ```
 
 Raw strings on XDM_CONST fields cause silent data loss in Cortex -- the value is dropped.
@@ -132,13 +132,13 @@ The default (final) branch of an `if()`-chain for an XDM_CONST field must be ano
 ```
 // WRONG -- raw string default
 xdm.alert.category = if(
-    _cat = "sql_injection", XDM_CONST.THREAT_CATEGORY_SQL_INJECTION,
-    _cat != null, _cat)                    // raw string default!
+    tmp_cat = "sql_injection", XDM_CONST.THREAT_CATEGORY_SQL_INJECTION,
+    tmp_cat != null, tmp_cat)                    // raw string default!
 
 // RIGHT
 xdm.alert.category = if(
-    _cat = "sql_injection", XDM_CONST.THREAT_CATEGORY_SQL_INJECTION,
-    _cat = "cryptominer",   XDM_CONST.THREAT_CATEGORY_CRYPTOMINER)
+    tmp_cat = "sql_injection", XDM_CONST.THREAT_CATEGORY_SQL_INJECTION,
+    tmp_cat = "cryptominer",   XDM_CONST.THREAT_CATEGORY_CRYPTOMINER)
 ```
 
 If no matching constant exists for the default case, omit the default branch so unmatched values produce null (safe). Use `xdm.alert.subcategory` (String type) for the raw vendor text as a fallback.
@@ -152,16 +152,16 @@ If unsure which constant to use, OMIT the field entirely. See [pitfall-traps.md]
 ```
 // WRONG -- a disposition forced into outcome
 xdm.event.outcome = if(
-    _action = "isolate", XDM_CONST.OUTCOME_FAILED,
-    _action != null,     XDM_CONST.OUTCOME_PARTIAL)
+    tmp_action = "isolate", XDM_CONST.OUTCOME_FAILED,
+    tmp_action != null,     XDM_CONST.OUTCOME_PARTIAL)
 
 // RIGHT -- keep the verb in observer.action; omit outcome
-xdm.observer.action = _action
+xdm.observer.action = tmp_action
 // xdm.event.outcome intentionally not set: a detection has no success / failure.
 // Set it only when the log reports a real result, e.g. a permit / block decision:
 xdm.event.outcome = if(
-    _status = "blocked",   XDM_CONST.OUTCOME_FAILED,
-    _status = "permitted", XDM_CONST.OUTCOME_SUCCESS)
+    tmp_status = "blocked",   XDM_CONST.OUTCOME_FAILED,
+    tmp_status = "permitted", XDM_CONST.OUTCOME_SUCCESS)
 ```
 
 ## Risk and deviation metrics -> xdm.alert.risks
@@ -170,8 +170,8 @@ A numeric ratio, deviation, or score with no typed numeric XDM home -- e.g. `met
 
 ```
 xdm.alert.risks = concat(
-    "risk_score=", _risk_score,
-    if(_baseline_deviation != null, concat(" baseline_deviation=", _baseline_deviation), ""))
+    "risk_score=", tmp_risk_score,
+    if(tmp_baseline_deviation != null, concat(" baseline_deviation=", tmp_baseline_deviation), ""))
 ```
 
 Dropping such a metric is a choice, not a necessity. When you do drop one, record it in the NOT MAPPED block as "intentionally omitted" with a reason -- never as "no XDM home", which is false for any value that fits the `xdm.alert.risks` String sink.
@@ -182,15 +182,15 @@ If a vendor source field name contains `"score"` (e.g. `risk_score`, `riskScore`
 
 ```
 xdm.alert.severity = if(
-    _score >= 80, "Critical",
-    _score >= 50, "High",
-    _score >= 30, "Medium",
-    _score != null, "Low"),
+    tmp_score >= 80, "Critical",
+    tmp_score >= 50, "High",
+    tmp_score >= 30, "Medium",
+    tmp_score != null, "Low"),
 xdm.event.log_level = if(
-    _score >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
-    _score >= 50, XDM_CONST.LOG_LEVEL_ERROR,
-    _score >= 30, XDM_CONST.LOG_LEVEL_WARNING,
-    _score != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
+    tmp_score >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
+    tmp_score >= 50, XDM_CONST.LOG_LEVEL_ERROR,
+    tmp_score >= 30, XDM_CONST.LOG_LEVEL_WARNING,
+    tmp_score != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
 ```
 
 NEVER assign the raw score via `to_string()` or as a number to `xdm.alert.severity`. `xdm.alert.severity` is a categorical String field; an unbanded number-string is a silent regression that the linter cannot catch.
@@ -202,31 +202,31 @@ This rule does NOT apply to non-numeric severity columns (already-banded labels 
 When the log description supplies a numeric severity scale and a band table (for example "1-25 Low, 26-50 Moderate, 51-75 High, 76-100 Critical"), read the thresholds from the prose and use them. Normalise vendor band labels to the closed XDM set -- `Critical` / `High` / `Medium` / `Low` -- so a vendor `"Moderate"` becomes XDM `"Medium"`. Coerce the numeric severity with `to_integer(to_number(...))` (ERR-015) and floor to a band; never echo the raw number.
 
 ```
-_sev = to_integer(to_number(_sev_str)),
+tmp_sev = to_integer(to_number(tmp_sev_str)),
 xdm.alert.severity = if(
-    _sev >= 76, "Critical",
-    _sev >= 51, "High",
-    _sev >= 26, "Medium",                 // vendor "Moderate" -> XDM "Medium"
-    _sev != null, "Low"),                 // floor to a band, never the raw number
+    tmp_sev >= 76, "Critical",
+    tmp_sev >= 51, "High",
+    tmp_sev >= 26, "Medium",                 // vendor "Moderate" -> XDM "Medium"
+    tmp_sev != null, "Low"),                 // floor to a band, never the raw number
 xdm.event.log_level = if(
-    _sev >= 76, XDM_CONST.LOG_LEVEL_CRITICAL,
-    _sev >= 51, XDM_CONST.LOG_LEVEL_ERROR,
-    _sev >= 26, XDM_CONST.LOG_LEVEL_WARNING,
-    _sev != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
+    tmp_sev >= 76, XDM_CONST.LOG_LEVEL_CRITICAL,
+    tmp_sev >= 51, XDM_CONST.LOG_LEVEL_ERROR,
+    tmp_sev >= 26, XDM_CONST.LOG_LEVEL_WARNING,
+    tmp_sev != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
 ```
 
 ## Severity normalisation (for already-banded labels)
 
 ```
 xdm.alert.severity = if(
-    _risk_level = "low",      "Low",
-    _risk_level = "medium",   "Medium",
-    _risk_level = "high",     "High",
-    _risk_level = "critical", "Critical",
-    _risk_level != null,      _risk_level)
+    tmp_risk_level = "low",      "Low",
+    tmp_risk_level = "medium",   "Medium",
+    tmp_risk_level = "high",     "High",
+    tmp_risk_level = "critical", "Critical",
+    tmp_risk_level != null,      tmp_risk_level)
 ```
 
-The `_risk_level != null, _risk_level` floor is safe here because the source vocabulary IS the band vocabulary: an unmatched value is still a band word. Do NOT use a raw passthrough when the source vocabulary is something else, such as the log-level words below.
+The `tmp_risk_level != null, tmp_risk_level` floor is safe here because the source vocabulary IS the band vocabulary: an unmatched value is still a band word. Do NOT use a raw passthrough when the source vocabulary is something else, such as the log-level words below.
 
 ## Log-level vocabulary (severity words that are really log levels)
 
@@ -234,23 +234,23 @@ Some vendors put log-level words in the severity field: `debug`, `info` / `infor
 
 ```
 xdm.alert.severity = if(
-    _level = "debug",    "Informational",
-    _level = "info",     "Informational",
-    _level = "notice",   "Low",
-    _level = "warning",  "Medium",
-    _level = "error",    "High",
-    _level = "critical", "Critical",
-    _level != null,      "Low"),
+    tmp_level = "debug",    "Informational",
+    tmp_level = "info",     "Informational",
+    tmp_level = "notice",   "Low",
+    tmp_level = "warning",  "Medium",
+    tmp_level = "error",    "High",
+    tmp_level = "critical", "Critical",
+    tmp_level != null,      "Low"),
 xdm.event.log_level = if(
-    _level = "debug",    XDM_CONST.LOG_LEVEL_INFORMATIONAL,
-    _level = "info",     XDM_CONST.LOG_LEVEL_INFORMATIONAL,
-    _level = "notice",   XDM_CONST.LOG_LEVEL_NOTICE,
-    _level = "warning",  XDM_CONST.LOG_LEVEL_WARNING,
-    _level = "error",    XDM_CONST.LOG_LEVEL_ERROR,
-    _level = "critical", XDM_CONST.LOG_LEVEL_CRITICAL)
+    tmp_level = "debug",    XDM_CONST.LOG_LEVEL_INFORMATIONAL,
+    tmp_level = "info",     XDM_CONST.LOG_LEVEL_INFORMATIONAL,
+    tmp_level = "notice",   XDM_CONST.LOG_LEVEL_NOTICE,
+    tmp_level = "warning",  XDM_CONST.LOG_LEVEL_WARNING,
+    tmp_level = "error",    XDM_CONST.LOG_LEVEL_ERROR,
+    tmp_level = "critical", XDM_CONST.LOG_LEVEL_CRITICAL)
 ```
 
-The `xdm.alert.severity` chain ends with a `_level != null, "Low"` band floor, NOT a raw passthrough, so an unrecognised value still lands on a real band instead of leaking a log-level word. The `xdm.event.log_level` chain omits the default branch: it is an `XDM_CONST` closed list, so an unmatched value resolves to null (safe). The linter flags WARN-037 when a log-level word is assigned to `xdm.alert.severity`.
+The `xdm.alert.severity` chain ends with a `tmp_level != null, "Low"` band floor, NOT a raw passthrough, so an unrecognised value still lands on a real band instead of leaking a log-level word. The `xdm.event.log_level` chain omits the default branch: it is an `XDM_CONST` closed list, so an unmatched value resolves to null (safe). The linter flags WARN-037 when a log-level word is assigned to `xdm.alert.severity`.
 
 ## Categorical enum array -> THREAT_CATEGORY scalar
 
@@ -265,7 +265,7 @@ When the log carries an array of MITRE technique IDs (e.g. `["T1059", "T1078"]`)
 ```
 // CORRECT
 xdm.alert.mitre_techniques = arraymap(
-    _mitre_technique_ids,
+    tmp_mitre_technique_ids,
     if("@element" = "T1059", XDM_CONST.MITRE_TECHNIQUE_COMMAND_AND_SCRIPTING_INTERPRETER,
     if("@element" = "T1078", XDM_CONST.MITRE_TECHNIQUE_VALID_ACCOUNTS,
     if("@element" = "T1110", XDM_CONST.MITRE_TECHNIQUE_BRUTE_FORCE,
@@ -277,10 +277,10 @@ The `XDM_CONST.MITRE_TECHNIQUE_*` constants use the canonical MITRE technique NA
 ```
 // WRONG -- double-wrap; produces array-of-arrays
 xdm.alert.mitre_techniques = arraycreate(
-    arraymap(_mitre_technique_ids, if(...)))
+    arraymap(tmp_mitre_technique_ids, if(...)))
 
 // WRONG -- raw string default; breaks XDM_CONST type
-arraymap(_ids, if("@element" = "T1059",
+arraymap(tmp_ids, if("@element" = "T1059",
     XDM_CONST.MITRE_TECHNIQUE_COMMAND_AND_SCRIPTING_INTERPRETER,
     "@element"))
 ```
@@ -292,10 +292,10 @@ Tactic IDs follow the same pattern with `XDM_CONST.MITRE_TACTIC_*` into `xdm.ale
 When a payload has only one IP or one user, map to BOTH source and target for maximum correlation coverage in XSIAM:
 
 ```
-xdm.source.ipv4          = _client_ip,
-xdm.target.ipv4          = _client_ip,
-xdm.source.user.username = _user,
-xdm.target.user.username = _user
+xdm.source.ipv4          = tmp_client_ip,
+xdm.target.ipv4          = tmp_client_ip,
+xdm.source.user.username = tmp_user,
+xdm.target.user.username = tmp_user
 ```
 
 Only do this when there is genuinely a single entity. When source and target are different (email sender vs recipient, web client vs upstream server), do NOT mirror.
@@ -319,32 +319,32 @@ Do NOT mirror role-specific fields (`sent_bytes`, `port`, `process.*`, `zone`, `
 
 ```
 | alter
-    xdm.source.ipv4               = _offender_ip,
-    xdm.source.user.username      = _offender_username,
-    xdm.source.user.upn           = _offender_username,
-    xdm.source.is_internal_ip     = _offender_is_internal,
-    xdm.target.ipv4               = _offender_ip,
-    xdm.target.user.username      = _offender_username,
-    xdm.target.user.upn           = _offender_username,
-    xdm.target.is_internal_ip     = _offender_is_internal;
+    xdm.source.ipv4               = tmp_offender_ip,
+    xdm.source.user.username      = tmp_offender_username,
+    xdm.source.user.upn           = tmp_offender_username,
+    xdm.source.is_internal_ip     = tmp_offender_is_internal,
+    xdm.target.ipv4               = tmp_offender_ip,
+    xdm.target.user.username      = tmp_offender_username,
+    xdm.target.user.upn           = tmp_offender_username,
+    xdm.target.is_internal_ip     = tmp_offender_is_internal;
 ```
 
 Why not `xdm.{source,target}.is_external`? That path does NOT exist. The only canonical sink for an external/internal boolean is `is_internal_ip`. When the vendor exposes `external` (or equivalent), invert with:
 
 ```
-_is_internal = if(
-    to_boolean(_external) = true,  to_boolean("false"),
-    to_boolean(_external) = false, to_boolean("true"))
+tmp_is_internal = if(
+    to_boolean(tmp_external) = true,  to_boolean("false"),
+    to_boolean(tmp_external) = false, to_boolean("true"))
 ```
 
-Then mirror `_is_internal` into BOTH `xdm.source.is_internal_ip` and `xdm.target.is_internal_ip`.
+Then mirror `tmp_is_internal` into BOTH `xdm.source.is_internal_ip` and `xdm.target.is_internal_ip`.
 
 When NOT to mirror:
 
 - The vendor delivers BOTH a real source and a real target (firewall flows, proxy logs, EDR file-write events). Map each side from its own log fields.
 - The vendor delivers a victim entity with non-null identifiers. Use those.
 
-Stage boundary caveat: Mirroring lives in the FINAL `alter` stage (the `xdm.*` drain stage), NEVER in the same `alter` that derives the offender temp being mirrored. Cortex evaluates all targets in one `alter` in parallel ([parser-idioms.md](parser-idioms.md) idiom (xi)), so `xdm.source.ipv4 = _offender_ip` in the same stage that defines `_offender_ip` is rejected as "unknown field `_offender_ip`". Always: derive in stage N, drain + mirror in stage N+1.
+Stage boundary caveat: Mirroring lives in the FINAL `alter` stage (the `xdm.*` drain stage), NEVER in the same `alter` that derives the offender temp being mirrored. Cortex evaluates all targets in one `alter` in parallel ([parser-idioms.md](parser-idioms.md) idiom (xi)), so `xdm.source.ipv4 = tmp_offender_ip` in the same stage that defines `tmp_offender_ip` is rejected as "unknown field `tmp_offender_ip`". Always: derive in stage N, drain + mirror in stage N+1.
 
 ## Defensive `coalesce(PascalCase, camelCase)`
 
@@ -408,10 +408,10 @@ Companion classification: when the log is an authentication event, set `xdm.even
 ```
 xdm.event.type = "authentication",
 xdm.event.operation = if(
-    _mfa_method != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA,
+    tmp_mfa_method != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA,
     XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
-xdm.auth.mfa.method = _mfa_method,
-xdm.auth.is_mfa_needed = to_boolean(_mfa_required)
+xdm.auth.mfa.method = tmp_mfa_method,
+xdm.auth.is_mfa_needed = to_boolean(tmp_mfa_required)
 ```
 
 An authentication event has a fixed mandatory XDM field set (12 fields) that the authentication story depends on. Map the full set per [authentication-mapping.md](authentication-mapping.md); the linter raises the advisory WARN-042 for each mandatory field an auto-detected authentication rule leaves unmapped.
@@ -438,7 +438,7 @@ Never dump the whole payload into the description. `xdm.event.description = _raw
 
 ## No duplicate assignments
 
-Never assign the same temp variable to two different XDM fields unless both fields genuinely require the same value (e.g. `xdm.event.id` and `xdm.alert.original_alert_id` both receiving `_event_id` is acceptable). If you find yourself assigning the same value to two XDM fields that serve different semantic purposes, one of them is wrong.
+Never assign the same temp variable to two different XDM fields unless both fields genuinely require the same value (e.g. `xdm.event.id` and `xdm.alert.original_alert_id` both receiving `tmp_event_id` is acceptable). If you find yourself assigning the same value to two XDM fields that serve different semantic purposes, one of them is wrong.
 
 ## Event type vs original event type
 

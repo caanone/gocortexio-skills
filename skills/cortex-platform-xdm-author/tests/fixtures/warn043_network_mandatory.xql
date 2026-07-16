@@ -11,10 +11,10 @@
 filter
     _raw_log != null
 | alter
-    _src_ip = json_extract_scalar(_raw_log, "$.src_ip")
+    tmp_src_ip = json_extract_scalar(_raw_log, "$.src_ip")
 | alter
     xdm.observer.vendor = "AcmeFW",
     xdm.event.type = "network",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
-    xdm.source.ipv4 = _src_ip
+    xdm.source.ipv4 = tmp_src_ip
 ;

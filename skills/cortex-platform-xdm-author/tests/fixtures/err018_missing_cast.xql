@@ -6,7 +6,7 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _joined = arraystring(tags, ", ")
+    tmp_joined = arraystring(tags, ", ")
 | alter
-    xdm.event.description = _joined
+    xdm.event.description = tmp_joined
 ;

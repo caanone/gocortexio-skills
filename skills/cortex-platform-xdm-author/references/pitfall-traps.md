@@ -11,19 +11,19 @@ Scan this list before emitting any rule. Most of these are caught by `scripts/li
 
 | Pitfall | Wrong | Right |
 | --- | --- | --- |
-| Unused temp field | `_unused = something` (never assigned to XDM) | Remove it or map it to an XDM field |
+| Unused temp field | `tmp_unused = something` (never assigned to XDM) | Remove it or map it to an XDM field |
 | String vs number | `severityNumber = "4"` | `severityNumber = 4` |
 | Quoted XDM_CONST | `"XDM_CONST.OUTCOME_SUCCESS"` | `XDM_CONST.OUTCOME_SUCCESS` |
 | Quoted dataset name (MODEL) | `dataset="name_raw"` | `dataset=name_raw` |
-| Self-referencing XDM field | `xdm.target.ipv4 = coalesce(xdm.target.ipv4, _fallback)` | `xdm.target.ipv4 = _fallback` |
+| Self-referencing XDM field | `xdm.target.ipv4 = coalesce(xdm.target.ipv4, tmp_fallback)` | `xdm.target.ipv4 = tmp_fallback` |
 | Chained arrow operator | `imperva -> ids -> site_name` | `json_extract_scalar(to_string(imperva), "$.ids.site_name")` |
-| Missing `to_string()` wrap | `split(arrayindex(_parts, 3), "/")` | `split(to_string(arrayindex(_parts, 3)), "/")` |
-| Array field without `arraycreate` | `xdm.email.recipients = _recipient` | `xdm.email.recipients = if(_recipient != null, arraycreate(_recipient), null)` |
+| Missing `to_string()` wrap | `split(arrayindex(tmp_parts, 3), "/")` | `split(to_string(arrayindex(tmp_parts, 3)), "/")` |
+| Array field without `arraycreate` | `xdm.email.recipients = tmp_recipient` | `xdm.email.recipients = if(tmp_recipient != null, arraycreate(tmp_recipient), null)` |
 | Leading pipe on first stage | `[MODEL: ...]\n\| alter` | `[MODEL: ...]\nalter` (or `filter`) |
 | Missing terminal semicolon | `... = "Foo"` (end of rule) | `... = "Foo";` |
-| `from_epoch` (does not exist) | `from_epoch(_ts, "MILLIS")` | `parse_epoch(_ts, "MILLIS")` |
+| `from_epoch` (does not exist) | `from_epoch(tmp_ts, "MILLIS")` | `parse_epoch(tmp_ts, "MILLIS")` |
 | Trailing comma before `;` | `... = "Foo",;` | `... = "Foo";` |
-| Unguarded `parse_epoch` | `_time = parse_epoch(_ts, "MILLIS")` | `_time = if(_ts != null and _ts != "", parse_epoch(_ts, "MILLIS"), null)` |
+| Unguarded `parse_epoch` | `_time = parse_epoch(tmp_ts, "MILLIS")` | `_time = if(tmp_ts != null and tmp_ts != "", parse_epoch(tmp_ts, "MILLIS"), null)` |
 | `_time` assignment in MODEL rule | `_time = parse_epoch(...)` in MODEL | Remove it. `_time` is set during INGEST or by Cortex automatically. |
 | JSON path with `@` prefix | `json_extract_scalar(_raw_log, "$.@timestamp")` | `json_extract_scalar(_raw_log, "$['@timestamp']")` |
 
@@ -110,14 +110,14 @@ For the following groups, treat with OMIT-and-fall-back:
 | `xdm.network.ldap.{bind_auth_type,operation,scope}` | OMIT; place raw value in `xdm.event.description` |
 | `xdm.network.dcerpc.operation` | OMIT; raw operation name in `xdm.event.description` |
 | `xdm.network.dhcp.message_type` | OMIT; raw message type in `xdm.event.description` |
-| `xdm.target.registry{,_before}.value_type` | OMIT; raw value type in `xdm.event.description` |
+| `xdm.target.registry{,tmp_before}.value_type` | OMIT; raw value type in `xdm.event.description` |
 | `xdm.database.operation` | OMIT; raw SQL verb in `xdm.target.application.name` or `xdm.event.description` |
 
 Do NOT invent constants for any of the above. The Cortex IDE rejects unknown `XDM_CONST` values with a hard validation error, and a hallucinated constant typically passes a local-LLM self-check while failing the server-side compile.
 
 ## Unused temp variable rule
 
-Every underscore-prefixed variable you extract MUST appear on the RHS of an XDM field assignment. If you extract `_cloud_service` but cannot find a valid XDM_CONST for `xdm.source.cloud.service`, either:
+Every underscore-prefixed variable you extract MUST appear on the RHS of an XDM field assignment. If you extract `tmp_cloud_service` but cannot find a valid XDM_CONST for `xdm.source.cloud.service`, either:
 
 1. Map it to the String fallback field (e.g. `xdm.source.cloud.source_type`).
 2. Remove the extraction entirely.
@@ -133,8 +133,8 @@ Data model rules run inside a MODEL block. A `filter` stage as the FIRST stage i
 ```
 // WRONG -- no-op leading filter
 filter _raw_log != null
-| alter _foo = json_extract_scalar(_raw_log, "$.foo")
-| alter xdm.event.id = _foo
+| alter tmp_foo = json_extract_scalar(_raw_log, "$.foo")
+| alter xdm.event.id = tmp_foo
 
 // WRONG -- always-true tautology
 filter true
@@ -148,8 +148,8 @@ filter _vendor = "<vendor>" and _product = "<product>"
 ### Correct
 
 ```
-alter _foo = json_extract_scalar(_raw_log, "$.foo")
-| alter xdm.event.id = _foo
+alter tmp_foo = json_extract_scalar(_raw_log, "$.foo")
+| alter xdm.event.id = tmp_foo
 ```
 
 RULE: The first stage of the rule MUST be `alter`. Do NOT prefix the rule with a `filter` stage of any kind, even when the intent is "skip null logs" -- nulls are handled per-extraction with `coalesce` / `if` and per-field with null guards.

@@ -66,7 +66,7 @@ Assign in this order. Earlier categories first, since later ones often depend on
 
 The bundled `scripts/lint_rule.py` covers the syntactic subset of these checks (ERR-012 through ERR-018, ERR-024, INFO-012). Dataflow- and schema-dependent items such as WARN-019 unused-variable and ERR-025 must be reviewed by eye against the list below before invoking the linter.
 
-- Every `_temp` variable is consumed in an XDM assignment (WARN-019; unused = BLOCKING error, see ERR-019 in [parser-idioms.md](parser-idioms.md)).
+- Every `tmp_temp` variable is consumed in an XDM assignment (WARN-019; unused = BLOCKING error, see ERR-019 in [parser-idioms.md](parser-idioms.md)).
 - `xdm.observer.vendor` and `xdm.observer.product` are set (hardcoded strings).
 - `xdm.event.type` is set to a normalised category string.
 - `XDM_CONST` values are NOT quoted (WARN-014).
@@ -75,7 +75,7 @@ The bundled `scripts/lint_rule.py` covers the syntactic subset of these checks (
 - Numeric comparisons use numeric literals (`severity = 4` not `severity = "4"`).
 - Array-type XDM fields use `arraycreate()` (WARN-020).
 - `to_string()` wraps any `arrayindex()` output before passing to `split()` or `regextract()`.
-- No self-referencing XDM fields (`xdm.x = coalesce(xdm.x, _y)` is INVALID, ERR-011).
+- No self-referencing XDM fields (`xdm.x = coalesce(xdm.x, tmp_y)` is INVALID, ERR-011).
 - No chained arrow operators (`column -> field -> subfield` is INVALID; use `json_extract_scalar`).
 - Rule ends with a semicolon (ERR-009). No trailing comma before the semicolon (ERR-010).
 - A null-guard `filter` is present as the first stage (and is NOT a no-op tautology -- see "No no-op leading filter stages" in [pitfall-traps.md](pitfall-traps.md)).

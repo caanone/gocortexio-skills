@@ -105,6 +105,7 @@ class TestSyntacticRules(unittest.TestCase):
         ("err024_sibling_reference.xql", "ERR-024"),
         ("err025_concat_hidden.xql", "ERR-025"),
         ("err027_anchor_read.xql", "ERR-027"),
+        ("err028_underscore_temp.xql", "ERR-028"),
         ("warn014_quoted_const.xql", "WARN-014"),
         ("warn035_scalar_into_array.xql", "WARN-035"),
         ("warn037_loglevel_severity.xql", "WARN-037"),
@@ -211,34 +212,34 @@ class TestWarn042AuthMandatory(unittest.TestCase):
     _COMPLETE_AUTH = """[MODEL: dataset=acme_idp_raw]
 filter _raw_log != null
 | alter
-    _upn = json_extract_scalar(_raw_log, "$.user"),
-    _src = json_extract_scalar(_raw_log, "$.src_ip"),
-    _dst = json_extract_scalar(_raw_log, "$.dst_ip"),
-    _sport = json_extract_scalar(_raw_log, "$.src_port"),
-    _dport = json_extract_scalar(_raw_log, "$.dst_port"),
-    _svc = json_extract_scalar(_raw_log, "$.service"),
-    _action = json_extract_scalar(_raw_log, "$.action"),
-    _result = json_extract_scalar(_raw_log, "$.result")
+    tmp_upn = json_extract_scalar(_raw_log, "$.user"),
+    tmp_src = json_extract_scalar(_raw_log, "$.src_ip"),
+    tmp_dst = json_extract_scalar(_raw_log, "$.dst_ip"),
+    tmp_sport = json_extract_scalar(_raw_log, "$.src_port"),
+    tmp_dport = json_extract_scalar(_raw_log, "$.dst_port"),
+    tmp_svc = json_extract_scalar(_raw_log, "$.service"),
+    tmp_action = json_extract_scalar(_raw_log, "$.action"),
+    tmp_result = json_extract_scalar(_raw_log, "$.result")
 | alter
     xdm.event.type = "authentication",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
     xdm.event.operation = XDM_CONST.OPERATION_TYPE_AUTH_LOGIN,
-    xdm.event.original_event_type = _action,
-    xdm.event.outcome = if(_result = "success", XDM_CONST.OUTCOME_SUCCESS,
-        _result != null, XDM_CONST.OUTCOME_FAILED),
-    xdm.auth.service = _svc,
-    xdm.source.user.upn = _upn,
+    xdm.event.original_event_type = tmp_action,
+    xdm.event.outcome = if(tmp_result = "success", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_result != null, XDM_CONST.OUTCOME_FAILED),
+    xdm.auth.service = tmp_svc,
+    xdm.source.user.upn = tmp_upn,
     xdm.source.user.identity_type = if(
-        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        tmp_upn != null, XDM_CONST.IDENTITY_TYPE_USER,
         XDM_CONST.IDENTITY_TYPE_UNKNOWN),
     xdm.source.user.user_type = if(
-        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_.]|service", XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
+        tmp_upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(tmp_upn) ~= "^svc[-_.]|service", XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
-    xdm.source.ipv4 = _src,
-    xdm.source.port = to_integer(to_number(_sport)),
-    xdm.target.ipv4 = _dst,
-    xdm.target.port = to_integer(to_number(_dport)),
+    xdm.source.ipv4 = tmp_src,
+    xdm.source.port = to_integer(to_number(tmp_sport)),
+    xdm.target.ipv4 = tmp_dst,
+    xdm.target.port = to_integer(to_number(tmp_dport)),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP
 ;
 """
@@ -442,7 +443,7 @@ filter _raw_log != null
 
 class TestErr027Branches(unittest.TestCase):
     """ERR-027 has two detail branches: a self-referential anchor lift
-    (`_x = coalesce(_x, ...)`) and a bare read of an underscore field
+    (`tmp_x = coalesce(tmp_x, ...)`) and a bare read of an underscore field
     never assigned in the rule. Lock both so a future change cannot
     silently collapse one."""
 
@@ -463,11 +464,11 @@ class TestErr027Branches(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            "    _resource_type = json_extract_scalar(_raw_log, \"$.resource_type\"),\n"
-            "    _action_class = if(_resource_type != null,\n"
-            "        arrayindex(split(_resource_type, \"_\"), 0))\n"
+            "    tmp_resource_type = json_extract_scalar(_raw_log, \"$.resource_type\"),\n"
+            "    tmp_action_class = if(tmp_resource_type != null,\n"
+            "        arrayindex(split(tmp_resource_type, \"_\"), 0))\n"
             "| alter\n"
-            "    xdm.target.resource.type = _resource_type\n"
+            "    xdm.target.resource.type = tmp_resource_type\n"
             ";\n"
         )
         self.assertEqual(self._err027(source), [])
@@ -496,9 +497,9 @@ class TestStructuralRules(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "alter\n"
-            '    _x = json_extract_scalar(_raw_log, "$.x")\n'
+            '    tmp_x = json_extract_scalar(_raw_log, "$.x")\n'
             "| alter\n"
-            "    xdm.event.id = _x\n"
+            "    xdm.event.id = tmp_x\n"
         )
         self.assertIn("ERR-009", self._ids(source))
 
@@ -506,9 +507,9 @@ class TestStructuralRules(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "alter\n"
-            '    _x = json_extract_scalar(_raw_log, "$.x")\n'
+            '    tmp_x = json_extract_scalar(_raw_log, "$.x")\n'
             "| alter\n"
-            "    xdm.event.id = _x,\n"
+            "    xdm.event.id = tmp_x,\n"
             ";\n"
         )
         self.assertIn("ERR-010", self._ids(source))
@@ -517,9 +518,9 @@ class TestStructuralRules(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "alter\n"
-            '    _x = json_extract_scalar(_raw_log, "$.x")\n'
+            '    tmp_x = json_extract_scalar(_raw_log, "$.x")\n'
             "| alter\n"
-            "    xdm.target.ipv4 = coalesce(xdm.target.ipv4, _x)\n"
+            "    xdm.target.ipv4 = coalesce(xdm.target.ipv4, tmp_x)\n"
             ";\n"
         )
         self.assertIn("ERR-011", self._ids(source))
@@ -528,9 +529,9 @@ class TestStructuralRules(unittest.TestCase):
         source = (
             '[MODEL: dataset="demo_raw"]\n'
             "alter\n"
-            '    _x = json_extract_scalar(_raw_log, "$.x")\n'
+            '    tmp_x = json_extract_scalar(_raw_log, "$.x")\n'
             "| alter\n"
-            "    xdm.event.id = _x\n"
+            "    xdm.event.id = tmp_x\n"
             ";\n"
         )
         self.assertIn("WARN-015", self._ids(source))
@@ -539,9 +540,9 @@ class TestStructuralRules(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "| alter\n"
-            '    _x = json_extract_scalar(_raw_log, "$.x")\n'
+            '    tmp_x = json_extract_scalar(_raw_log, "$.x")\n'
             "| alter\n"
-            "    xdm.event.id = _x\n"
+            "    xdm.event.id = tmp_x\n"
             ";\n"
         )
         self.assertIn("WARN-017", self._ids(source))
@@ -570,10 +571,10 @@ class TestGcRawGating(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "alter\n"
-            '    _used = json_extract_scalar(_raw_log, "$.id"),\n'
-            '    _dead = json_extract_scalar(_raw_log, "$.never")\n'
+            '    tmp_used = json_extract_scalar(_raw_log, "$.id"),\n'
+            '    tmp_dead = json_extract_scalar(_raw_log, "$.never")\n'
             "| alter\n"
-            "    xdm.event.id = _used\n"
+            "    xdm.event.id = tmp_used\n"
             ";\n"
         )
         ids = self._ids(source)
@@ -583,10 +584,10 @@ class TestGcRawGating(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_gc_raw]\n"
             "alter\n"
-            '    _used = json_extract_scalar(_raw_log, "$.id"),\n'
-            '    _dead = json_extract_scalar(_raw_log, "$.never")\n'
+            '    tmp_used = json_extract_scalar(_raw_log, "$.id"),\n'
+            '    tmp_dead = json_extract_scalar(_raw_log, "$.never")\n'
             "| alter\n"
-            "    xdm.event.id = _used\n"
+            "    xdm.event.id = tmp_used\n"
             ";\n"
         )
         self.assertIn("ERR-019", self._ids(source))
@@ -595,9 +596,9 @@ class TestGcRawGating(unittest.TestCase):
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "alter\n"
-            '    _note = json_extract_scalar(_raw_log, "$.note")\n'
+            '    tmp_note = json_extract_scalar(_raw_log, "$.note")\n'
             "| alter\n"
-            '    xdm.event.description = concat("Note: ", _note)\n'
+            '    xdm.event.description = concat("Note: ", tmp_note)\n'
             ";\n"
         )
         self.assertNotIn("ERR-025", self._ids(source))
@@ -616,11 +617,11 @@ class TestWarn037SeverityLogLevel(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _level = json_extract_scalar(_raw_log, "$.level")\n'
+            '    tmp_level = json_extract_scalar(_raw_log, "$.level")\n'
             "| alter\n"
             "    xdm.alert.severity = if(\n"
-            '        _level = "warning", "Warning",\n'
-            '        _level != null, _level)\n'
+            '        tmp_level = "warning", "Warning",\n'
+            '        tmp_level != null, tmp_level)\n'
             ";\n"
         )
         self.assertEqual(len(self._w37(source)), 1)
@@ -632,12 +633,12 @@ class TestWarn037SeverityLogLevel(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _level = json_extract_scalar(_raw_log, "$.level")\n'
+            '    tmp_level = json_extract_scalar(_raw_log, "$.level")\n'
             "| alter\n"
             "    xdm.alert.severity = if(\n"
-            '        _level = "warning", "Medium",\n'
-            '        _level = "error", "High",\n'
-            '        _level != null, "Low")\n'
+            '        tmp_level = "warning", "Medium",\n'
+            '        tmp_level = "error", "High",\n'
+            '        tmp_level != null, "Low")\n'
             ";\n"
         )
         self.assertEqual(self._w37(source), [])
@@ -647,7 +648,7 @@ class TestWarn037SeverityLogLevel(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _level = json_extract_scalar(_raw_log, "$.level")\n'
+            '    tmp_level = json_extract_scalar(_raw_log, "$.level")\n'
             "| alter\n"
             '    xdm.alert.severity = "Error"\n'
             ";\n"
@@ -660,10 +661,10 @@ class TestWarn037SeverityLogLevel(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _n = json_extract_scalar(_raw_log, "$.n")\n'
+            '    tmp_n = json_extract_scalar(_raw_log, "$.n")\n'
             "| alter\n"
             '    xdm.alert.subcategory = "Error Page Probe",\n'
-            "    xdm.alert.severity = if(_n != null, \"High\")\n"
+            "    xdm.alert.severity = if(tmp_n != null, \"High\")\n"
             ";\n"
         )
         self.assertEqual(self._w37(source), [])
@@ -681,13 +682,13 @@ class TestWarn038HostCompanion(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _asset = json_extract_scalar(_raw_log, "$.asset"),\n'
-            '    _dst = json_extract_scalar(_raw_log, "$.dst")\n'
+            '    tmp_asset = json_extract_scalar(_raw_log, "$.asset"),\n'
+            '    tmp_dst = json_extract_scalar(_raw_log, "$.dst")\n'
             "| alter\n"
-            "    xdm.target.ipv4 = _dst,\n"
-            "    xdm.target.host.hostname = _asset,\n"
-            "    xdm.target.host.ipv4_addresses = if(_dst != null, "
-            "arraycreate(_dst), null)\n"
+            "    xdm.target.ipv4 = tmp_dst,\n"
+            "    xdm.target.host.hostname = tmp_asset,\n"
+            "    xdm.target.host.ipv4_addresses = if(tmp_dst != null, "
+            "arraycreate(tmp_dst), null)\n"
             ";\n"
         )
         self.assertEqual(self._w38(source), [])
@@ -698,9 +699,9 @@ class TestWarn038HostCompanion(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _dst = json_extract_scalar(_raw_log, "$.dst")\n'
+            '    tmp_dst = json_extract_scalar(_raw_log, "$.dst")\n'
             "| alter\n"
-            "    xdm.target.ipv4 = _dst\n"
+            "    xdm.target.ipv4 = tmp_dst\n"
             ";\n"
         )
         self.assertEqual(self._w38(source), [])
@@ -719,10 +720,10 @@ class TestInfo013OverMapping(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _ip = json_extract_scalar(_raw_log, "$.ip")\n'
+            '    tmp_ip = json_extract_scalar(_raw_log, "$.ip")\n'
             "| alter\n"
-            "    xdm.source.ipv4 = _ip,\n"
-            "    xdm.target.ipv4 = _ip\n"
+            "    xdm.source.ipv4 = tmp_ip,\n"
+            "    xdm.target.ipv4 = tmp_ip\n"
             ";\n"
         )
         self.assertEqual(self._i13(source), [])
@@ -734,11 +735,11 @@ class TestInfo013OverMapping(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _url = json_extract_scalar(_raw_log, "$.url")\n'
+            '    tmp_url = json_extract_scalar(_raw_log, "$.url")\n'
             "| alter\n"
-            "    xdm.target.url = _url,\n"
-            "    xdm.network.http.url = _url,\n"
-            '    xdm.event.description = concat("URL: ", _url)\n'
+            "    xdm.target.url = tmp_url,\n"
+            "    xdm.network.http.url = tmp_url,\n"
+            '    xdm.event.description = concat("URL: ", tmp_url)\n'
             ";\n"
         )
         self.assertEqual(self._i13(source), [])
@@ -748,11 +749,11 @@ class TestInfo013OverMapping(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _thing = json_extract_scalar(_raw_log, "$.thing")\n'
+            '    tmp_thing = json_extract_scalar(_raw_log, "$.thing")\n'
             "| alter\n"
-            "    xdm.source.user.username = _thing,\n"
-            "    xdm.target.user.username = _thing,\n"
-            "    xdm.alert.name = _thing\n"
+            "    xdm.source.user.username = tmp_thing,\n"
+            "    xdm.target.user.username = tmp_thing,\n"
+            "    xdm.alert.name = tmp_thing\n"
             ";\n"
         )
         hits = self._i13(source)
@@ -773,7 +774,7 @@ class TestWarn039PayloadInDescription(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _d = json_extract_scalar(_raw_log, "$.d")\n'
+            '    tmp_d = json_extract_scalar(_raw_log, "$.d")\n'
             "| alter\n"
             "    xdm.event.description = to_json_string(detail)\n"
             ";\n"
@@ -785,10 +786,10 @@ class TestWarn039PayloadInDescription(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _act = json_extract_scalar(_raw_log, "$.action")\n'
+            '    tmp_act = json_extract_scalar(_raw_log, "$.action")\n'
             "| alter\n"
-            "    xdm.observer.action = _act,\n"
-            '    xdm.event.description = concat("Action: ", _act)\n'
+            "    xdm.observer.action = tmp_act,\n"
+            '    xdm.event.description = concat("Action: ", tmp_act)\n'
             ";\n"
         )
         self.assertEqual(self._w39(source), [])
@@ -827,34 +828,34 @@ class TestWarn043NetworkMandatory(unittest.TestCase):
     _COMPLETE_NETWORK = """[MODEL: dataset=acmefw_raw]
 filter _raw_log != null
 | alter
-    _act = json_extract_scalar(_raw_log, "$.action"),
-    _src = json_extract_scalar(_raw_log, "$.src_ip"),
-    _dst = json_extract_scalar(_raw_log, "$.dst_ip"),
-    _sport = json_extract_scalar(_raw_log, "$.src_port"),
-    _dport = json_extract_scalar(_raw_log, "$.dst_port"),
-    _sent = json_extract_scalar(_raw_log, "$.bytes_out"),
-    _rcvd = json_extract_scalar(_raw_log, "$.bytes_in")
+    tmp_act = json_extract_scalar(_raw_log, "$.action"),
+    tmp_src = json_extract_scalar(_raw_log, "$.src_ip"),
+    tmp_dst = json_extract_scalar(_raw_log, "$.dst_ip"),
+    tmp_sport = json_extract_scalar(_raw_log, "$.src_port"),
+    tmp_dport = json_extract_scalar(_raw_log, "$.dst_port"),
+    tmp_sent = json_extract_scalar(_raw_log, "$.bytes_out"),
+    tmp_rcvd = json_extract_scalar(_raw_log, "$.bytes_in")
 | alter
     xdm.observer.vendor = "AcmeFW",
     xdm.event.type = "network",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
-    xdm.event.outcome = if(_act = "allow", XDM_CONST.OUTCOME_SUCCESS, _act != null, XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_UNKNOWN),
+    xdm.event.outcome = if(tmp_act = "allow", XDM_CONST.OUTCOME_SUCCESS, tmp_act != null, XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_UNKNOWN),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP,
     xdm.network.protocol_layers = arraycreate("TCP"),
     xdm.network.http.http_header.header = "",
     xdm.network.http.http_header.value = "",
     xdm.network.http.url_category = XDM_CONST.URL_CATEGORY_UNKNOWN,
-    xdm.source.ipv4 = _src,
+    xdm.source.ipv4 = tmp_src,
     xdm.source.ipv6 = "",
-    xdm.source.is_internal_ip = if(incidr(_src, "10.0.0.0/8"), true, false),
-    xdm.source.port = to_integer(to_number(_sport)),
-    xdm.source.sent_bytes = to_integer(to_number(_sent)),
+    xdm.source.is_internal_ip = if(incidr(tmp_src, "10.0.0.0/8"), true, false),
+    xdm.source.port = to_integer(to_number(tmp_sport)),
+    xdm.source.sent_bytes = to_integer(to_number(tmp_sent)),
     xdm.source.host.device_id = "",
-    xdm.target.ipv4 = _dst,
+    xdm.target.ipv4 = tmp_dst,
     xdm.target.ipv6 = "",
-    xdm.target.is_internal_ip = if(incidr(_dst, "10.0.0.0/8"), true, false),
-    xdm.target.port = to_integer(to_number(_dport)),
-    xdm.target.sent_bytes = to_integer(to_number(_rcvd)),
+    xdm.target.is_internal_ip = if(incidr(tmp_dst, "10.0.0.0/8"), true, false),
+    xdm.target.port = to_integer(to_number(tmp_dport)),
+    xdm.target.sent_bytes = to_integer(to_number(tmp_rcvd)),
     xdm.target.host.device_id = ""
 ;
 """
@@ -889,13 +890,13 @@ filter _raw_log != null
             "[MODEL: dataset=vpn_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _u = json_extract_scalar(_raw_log, "$.user")\n'
+            '    tmp_u = json_extract_scalar(_raw_log, "$.user")\n'
             "| alter\n"
             '    xdm.event.type = "authentication",\n'
             "    xdm.event.tags = arraycreate("
             "XDM_CONST.EVENT_TAG_AUTHENTICATION, "
             "XDM_CONST.EVENT_TAG_NETWORK),\n"
-            "    xdm.source.user.upn = _u\n;\n"
+            "    xdm.source.user.upn = tmp_u\n;\n"
         )
         ids = [v["rule_id"] for v in lint(source)]
         self.assertIn("WARN-042", ids)
@@ -920,7 +921,7 @@ filter _raw_log != null
         good = self._COMPLETE_NETWORK
         self.assertEqual(self._w43(good), [])
         bad = good.replace(
-            "if(_act = \"allow\", XDM_CONST.OUTCOME_SUCCESS, _act != null, "
+            "if(tmp_act = \"allow\", XDM_CONST.OUTCOME_SUCCESS, tmp_act != null, "
             "XDM_CONST.OUTCOME_FAILED, XDM_CONST.OUTCOME_UNKNOWN)",
             "XDM_CONST.OUTCOME_PARTIAL",
         )
@@ -996,14 +997,14 @@ class TestStoryMarkerEdgeCases(unittest.TestCase):
             '    xdm.observer.vendor = "V",\n'
             "    xdm.event.type = {temp}\n;\n"
         )
-        ids = _rule_ids_from(base.format(temp="_network_type"))
+        ids = _rule_ids_from(base.format(temp="tmp_network_type"))
         self.assertNotIn("WARN-043", ids)
-        ids = _rule_ids_from(base.format(temp="_authentication_kind"))
+        ids = _rule_ids_from(base.format(temp="tmp_authentication_kind"))
         self.assertNotIn("WARN-042", ids)
         # The literal forms must still classify.
         lit = base.replace("xdm.event.type = {temp}",
                            'xdm.event.type = "network"')
-        self.assertIn("WARN-043", _rule_ids_from(lit.format(temp="_t")))
+        self.assertIn("WARN-043", _rule_ids_from(lit.format(temp="tmp_t")))
 
     def test_static_upn_flagged(self):
         # EC3: upn is the story correlation key -- a static or empty
@@ -1012,7 +1013,7 @@ class TestStoryMarkerEdgeCases(unittest.TestCase):
             "[MODEL: dataset=x_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _u = json_extract_scalar(_raw_log, "$.u")\n'
+            '    tmp_u = json_extract_scalar(_raw_log, "$.u")\n'
             "| alter\n"
             '    xdm.observer.vendor = "V",\n'
             '    xdm.event.type = "authentication",\n'
@@ -1024,7 +1025,7 @@ class TestStoryMarkerEdgeCases(unittest.TestCase):
         self.assertEqual(len(hits), 1, hits)
         # A raw-mapped upn is never second-guessed.
         ok = rule.replace('xdm.source.user.upn = ""',
-                          "xdm.source.user.upn = _u")
+                          "xdm.source.user.upn = tmp_u")
         self.assertEqual(
             [v for v in lint(ok) if "correlation key" in v["message"]], []
         )
@@ -1048,13 +1049,13 @@ class TestStoryMarkerEdgeCases(unittest.TestCase):
             return [v for v in lint(base.format(t=t, rhs=rhs))
                     if "UPN-shaped" in v["message"]]
 
-        self.assertEqual(len(shape_hits("_user", "_user")), 1)
-        self.assertEqual(len(shape_hits("_username", "_username")), 1)
-        self.assertEqual(shape_hits("_upn", "_upn"), [])
-        self.assertEqual(shape_hits("_email", "_email"), [])
-        guard = ('if(_user contains "@", _user, _user != null, '
-                 'concat(_user, "@localhost"))')
-        self.assertEqual(shape_hits("_user", guard), [])
+        self.assertEqual(len(shape_hits("tmp_user", "tmp_user")), 1)
+        self.assertEqual(len(shape_hits("tmp_username", "tmp_username")), 1)
+        self.assertEqual(shape_hits("tmp_upn", "tmp_upn"), [])
+        self.assertEqual(shape_hits("tmp_email", "tmp_email"), [])
+        guard = ('if(tmp_user contains "@", tmp_user, tmp_user != null, '
+                 'concat(tmp_user, "@localhost"))')
+        self.assertEqual(shape_hits("tmp_user", guard), [])
 
     def test_duplicate_tags_flagged_on_auth_only_rule(self):
         # EC7: the overwrite hazard exists without any network marker.
@@ -1121,11 +1122,11 @@ class TestCascadeHint(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            "    _x = json_extract_scalar(_raw_log, \"$.x\"),\n"
-            "    _y = json_extract_scalar(_raw_log, \"$.y\")\n"
+            "    tmp_x = json_extract_scalar(_raw_log, \"$.x\"),\n"
+            "    tmp_y = json_extract_scalar(_raw_log, \"$.y\")\n"
             "| alter\n"
-            "    xdm.event.duration = _x - _y,\n"
-            "    xdm.target.port = to_number(_y)\n"
+            "    xdm.event.duration = tmp_x - tmp_y,\n"
+            "    xdm.target.port = to_number(tmp_y)\n"
             ";\n"
         )
         ids = [v["rule_id"] for v in lint(source)]
@@ -1144,10 +1145,10 @@ class TestWarn044Process(unittest.TestCase):
             "[MODEL: dataset=acme_edr_raw]\n"
             "filter _raw_log != null\n"
             "| alter\n"
-            '    _p = json_extract_scalar(_raw_log, "$.image")\n'
+            '    tmp_p = json_extract_scalar(_raw_log, "$.image")\n'
             "| alter\n"
-            f"    {target} = _p,\n"
-            "    xdm.source.process.name = _p\n"
+            f"    {target} = tmp_p,\n"
+            "    xdm.source.process.name = tmp_p\n"
             ";\n"
         )
 
@@ -1214,7 +1215,7 @@ class TestWarn045EventTagEnum(unittest.TestCase):
 
     def test_per_record_if_chain_accepted(self):
         rule = self._rule(
-            "if(_x != null, "
+            "if(tmp_x != null, "
             "arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, "
             "XDM_CONST.EVENT_TAG_SAAS), null)"
         )
@@ -1259,6 +1260,63 @@ class TestWarn046CatchAll(unittest.TestCase):
         self.assertNotIn("WARN-046", _rule_ids_from(rule))
 
 
+class TestErr028ReservedUnderscore(unittest.TestCase):
+    """A skill-authored scratch temp must use tmp_; a _-prefixed temp is a
+    hard error (ERR-028) because the _ namespace is reserved for platform /
+    system fields. Reading _raw_log / _time is fine."""
+
+    def _ids(self, source: str) -> list:
+        return [v["rule_id"] for v in lint(source)]
+
+    def test_underscore_temp_flagged(self):
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    _user = arrayindex(regextract(_raw_log, "user=(\\w+)"), 0)\n'
+            "| alter\n"
+            "    xdm.source.user.username = _user\n;\n"
+        )
+        vios = [v for v in lint(rule) if v["rule_id"] == "ERR-028"]
+        self.assertTrue(vios)
+        self.assertEqual(vios[0]["severity"], "error")
+
+    def test_tmp_temp_not_flagged(self):
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    tmp_user = arrayindex(regextract(_raw_log, "user=(\\w+)"), 0)\n'
+            "| alter\n"
+            "    xdm.source.user.username = tmp_user\n;\n"
+        )
+        self.assertNotIn("ERR-028", self._ids(rule))
+
+    def test_reading_platform_underscore_field_not_flagged(self):
+        # Reading _raw_log (and the filter guard) must never trip ERR-028;
+        # only ASSIGNING a _-prefixed field does.
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            "    xdm.event.description = _raw_log\n;\n"
+        )
+        self.assertNotIn("ERR-028", self._ids(rule))
+
+    def test_time_assignment_stays_warn018_not_err028(self):
+        # _time has its own advisory WARN-018; ERR-028 exempts it to avoid
+        # double-reporting the same line.
+        rule = (
+            "[MODEL: dataset=x_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            "    _time = to_timestamp(1700000000)\n;\n"
+        )
+        ids = self._ids(rule)
+        self.assertIn("WARN-018", ids)
+        self.assertNotIn("ERR-028", ids)
+
+
 class TestWarn047PrependFragile(unittest.TestCase):
     """A syslog rule must extract identically whether the record arrives
     direct or behind a relay-prepended header. A ^-anchored / positional
@@ -1273,18 +1331,18 @@ class TestWarn047PrependFragile(unittest.TestCase):
             "[MODEL: dataset=x_raw]\n"
             "filter\n    _raw_log != null\n"
             "| alter\n"
-            '    _pri = to_integer(to_number(arrayindex(regextract('
+            '    tmp_pri = to_integer(to_number(arrayindex(regextract('
             '_raw_log, "^<(\\d{1,3})>"), 0))),\n'
         )
 
     def test_positional_body_capture_flagged(self):
         rule = (
             self._syslog_head()
-            + '    _m = arrayindex(regextract(_raw_log, '
+            + '    tmp_m = arrayindex(regextract(_raw_log, '
             '"^%(\\w+-\\d-\\w+):"), 0)\n'
             "| alter\n"
-            "    xdm.event.original_event_type = _m,\n"
-            "    xdm.event.log_level = if(_pri != null, "
+            "    xdm.event.original_event_type = tmp_m,\n"
+            "    xdm.event.log_level = if(tmp_pri != null, "
             "XDM_CONST.LOG_LEVEL_INFORMATIONAL)\n;\n"
         )
         vios = [v for v in lint(rule) if v["rule_id"] == "WARN-047"]
@@ -1294,11 +1352,11 @@ class TestWarn047PrependFragile(unittest.TestCase):
     def test_everything_after_header_grab_flagged(self):
         rule = (
             self._syslog_head()
-            + '    _body = arrayindex(regextract(_raw_log, '
+            + '    tmp_body = arrayindex(regextract(_raw_log, '
             '"^<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+\\S+\\s+(.*)"), 0)\n'
             "| alter\n"
-            "    xdm.event.description = _body,\n"
-            "    xdm.event.log_level = if(_pri != null, "
+            "    xdm.event.description = tmp_body,\n"
+            "    xdm.event.log_level = if(tmp_pri != null, "
             "XDM_CONST.LOG_LEVEL_INFORMATIONAL)\n;\n"
         )
         self.assertIn("WARN-047", _rule_ids_from(rule))
@@ -1306,11 +1364,11 @@ class TestWarn047PrependFragile(unittest.TestCase):
     def test_token_anchored_body_not_flagged(self):
         rule = (
             self._syslog_head()
-            + '    _m = arrayindex(regextract(_raw_log, '
+            + '    tmp_m = arrayindex(regextract(_raw_log, '
             '"%(\\w+-\\d-\\w+):"), 0)\n'
             "| alter\n"
-            "    xdm.event.original_event_type = _m,\n"
-            "    xdm.event.log_level = if(_pri != null, "
+            "    xdm.event.original_event_type = tmp_m,\n"
+            "    xdm.event.log_level = if(tmp_pri != null, "
             "XDM_CONST.LOG_LEVEL_INFORMATIONAL)\n;\n"
         )
         self.assertNotIn("WARN-047", _rule_ids_from(rule))
@@ -1320,10 +1378,10 @@ class TestWarn047PrependFragile(unittest.TestCase):
             "[MODEL: dataset=x_raw]\n"
             "filter\n    _raw_log != null\n"
             "| alter\n"
-            '    _host = arrayindex(regextract(_raw_log, '
+            '    tmp_host = arrayindex(regextract(_raw_log, '
             '"^.*<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+(\\S+)\\s"), 0)\n'
             "| alter\n"
-            "    xdm.observer.name = _host\n;\n"
+            "    xdm.observer.name = tmp_host\n;\n"
         )
         self.assertNotIn("WARN-047", _rule_ids_from(rule))
 
@@ -1334,10 +1392,10 @@ class TestWarn047PrependFragile(unittest.TestCase):
             "[MODEL: dataset=clf_raw]\n"
             "filter\n    _raw_log != null\n"
             "| alter\n"
-            '    _ip = arrayindex(regextract(_raw_log, '
+            '    tmp_ip = arrayindex(regextract(_raw_log, '
             '"^(\\d{1,3}(?:\\.\\d{1,3}){3})"), 0)\n'
             "| alter\n"
-            "    xdm.source.ipv4 = _ip\n;\n"
+            "    xdm.source.ipv4 = tmp_ip\n;\n"
         )
         self.assertNotIn("WARN-047", _rule_ids_from(rule))
 

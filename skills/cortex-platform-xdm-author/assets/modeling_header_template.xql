@@ -9,8 +9,9 @@
 // Generated via
 // GOCORTEX_SKILLS_MODEL="<model id>"
 // GOCORTEX_SKILLS_SKILL_NAME="cortex-platform-xdm-author"
-// GOCORTEX_SKILLS_SKILL_VERSION="1.8.0-beta.1"
+// GOCORTEX_SKILLS_SKILL_VERSION="1.8.0-beta.3"
 // GOCORTEX_SKILLS_SKILL_WARNING_COUNT="<lint warning count>"
+// GOCORTEX_SKILLS_SOURCE_BASIS="<spec-backed | sample-only>"
 //
 // <Vendor> <Product> -- XDM Data Model Rule
 // Dataset: <vendor>_<product>_raw
@@ -80,30 +81,30 @@ filter
     _raw_log != null
 | alter
     // Stage 1: extract from _raw_log using the relevant pattern (A/B/C/D).
-    _<vendor_field_1> = json_extract_scalar(_raw_log, "$.<path_1>"),
-    _<vendor_field_2> = json_extract_scalar(_raw_log, "$.<path_2>")
+    tmp_<vendor_field_1> = json_extract_scalar(_raw_log, "$.<path_1>"),
+    tmp_<vendor_field_2> = json_extract_scalar(_raw_log, "$.<path_2>")
 | alter
     // Stage 2: derive composite fields (banded scores, actor projections,
     // categorical enum routing). One alter per logical step keeps sibling
     // refs out of the same stage (parser idiom (xi)).
-    _severity = if(
-        _<score> >= 80, "Critical",
-        _<score> >= 50, "High",
-        _<score> >= 30, "Medium",
-        _<score> != null, "Low")
+    tmp_severity = if(
+        tmp_<score> >= 80, "Critical",
+        tmp_<score> >= 50, "High",
+        tmp_<score> >= 30, "Medium",
+        tmp_<score> != null, "Low")
 | alter
     // Stage 3: assign XDM fields using the extracted temps.
     xdm.observer.vendor = "<Vendor>",
     xdm.observer.product = "<Product>",
     xdm.event.type = "<NORMALISED_CATEGORY>",                  // ALERT/NETWORK/AUTH/EMAIL/FILE/PROCESS/ENDPOINT_ACTIVITY/AUDIT
-    xdm.event.original_event_type = _<vendor_event_type>,
-    xdm.event.id = _<vendor_field_1>,
-    xdm.alert.original_alert_id = _<vendor_field_1>,           // companion pair with xdm.event.id
-    xdm.alert.severity = _severity,
+    xdm.event.original_event_type = tmp_<vendor_event_type>,
+    xdm.event.id = tmp_<vendor_field_1>,
+    xdm.alert.original_alert_id = tmp_<vendor_field_1>,           // companion pair with xdm.event.id
+    xdm.alert.severity = tmp_severity,
     xdm.event.log_level = if(
-        _<score> >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
-        _<score> >= 50, XDM_CONST.LOG_LEVEL_ERROR,
-        _<score> >= 30, XDM_CONST.LOG_LEVEL_WARNING,
-        _<score> != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
+        tmp_<score> >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
+        tmp_<score> >= 50, XDM_CONST.LOG_LEVEL_ERROR,
+        tmp_<score> >= 30, XDM_CONST.LOG_LEVEL_WARNING,
+        tmp_<score> != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
     // ... additional xdm.* assignments
 ;

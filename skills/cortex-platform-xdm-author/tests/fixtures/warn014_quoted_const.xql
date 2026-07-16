@@ -8,11 +8,11 @@
 filter
     _raw_log != null
 | alter
-    _outcome = json_extract_scalar(_raw_log, "$.outcome")
+    tmp_outcome = json_extract_scalar(_raw_log, "$.outcome")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.event.type = "ALERT",
     xdm.event.outcome = if(
-        _outcome = "ok", "XDM_CONST.OUTCOME_SUCCESS",
+        tmp_outcome = "ok", "XDM_CONST.OUTCOME_SUCCESS",
         "XDM_CONST.OUTCOME_FAILED")
 ;

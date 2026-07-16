@@ -23,7 +23,7 @@ RevealX emits detection events as JSON-with-nested-arrays. On the LIVE TENANT th
   "risk_score": 72,
   "start_time": 1744720000000,
   "end_time": 1744720180000,
-  "_reporting_device_ip": "10.0.50.5",
+  "tmp_reporting_device_ip": "10.0.50.5",
   "appliance_id": 1138,
   "categories": ["brute_force", "credential_attack"],
   "mitre_tactics": [{"id": "TA0006"}],
@@ -41,7 +41,7 @@ RevealX emits detection events as JSON-with-nested-arrays. On the LIVE TENANT th
 }
 ```
 
-Note: `_reporting_device_ip` is a parser-stamped `_` anchor, not a raw column the MODEL can read -- like `_detection_category`, the rule leaves it alone, since reading a parser-only `_` column would be an ERR-027 unknown field. `properties` arrives as a typed Object (use scalar `->`). All four of `categories` / `participants` / `mitre_tactics` / `mitre_techniques` arrive as JSON strings on the live tenant -- the `-> []` cast is mandatory before any array function.
+Note: `tmp_reporting_device_ip` is a parser-stamped `_` anchor, not a raw column the MODEL can read -- like `tmp_detection_category`, the rule leaves it alone, since reading a parser-only `_` column would be an ERR-027 unknown field. `properties` arrives as a typed Object (use scalar `->`). All four of `categories` / `participants` / `mitre_tactics` / `mitre_techniques` arrive as JSON strings on the live tenant -- the `-> []` cast is mandatory before any array function.
 
 ## Field inventory
 
@@ -118,91 +118,91 @@ For the well-known sinks (`username`, `hostname`), the index identifies the cano
 [MODEL: dataset = extrahop_revealx_raw]
 
 alter
-    _event_id = to_string(id),
-    _event_type = type,
-    _alert_title = title,
-    _alert_description = description,
-    _alert_url = url,
-    _risk_score = risk_score,
-    _start_ms = start_time,
-    _end_ms = end_time,
-    _appliance_id = to_string(appliance_id),
-    _categories_arr = categories -> [],
-    _risk_event_name = properties -> risk_event_name,
-    _mitre_tactic_ids = arraymap(mitre_tactics -> [], "@element" -> id),
-    _mitre_technique_ids = arraymap(mitre_techniques -> [], "@element" -> id),
+    tmp_event_id = to_string(id),
+    tmp_event_type = type,
+    tmp_alert_title = title,
+    tmp_alert_description = description,
+    tmp_alert_url = url,
+    tmp_risk_score = risk_score,
+    tmp_start_ms = start_time,
+    tmp_end_ms = end_time,
+    tmp_appliance_id = to_string(appliance_id),
+    tmp_categories_arr = categories -> [],
+    tmp_risk_event_name = properties -> risk_event_name,
+    tmp_mitre_tactic_ids = arraymap(mitre_tactics -> [], "@element" -> id),
+    tmp_mitre_technique_ids = arraymap(mitre_techniques -> [], "@element" -> id),
     // Per-role array projections of participants[]. Per-scalar
     // projection: arraymap with inner if() returning the scalar when
     // role matches, then arrayfilter to drop nulls.
-    _offender_role_marks = arrayfilter(arraymap(participants -> [],
+    tmp_offender_role_marks = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "offender", "1", null)), "@element" != null),
-    _offender_ip_seq = arrayfilter(arraymap(participants -> [],
+    tmp_offender_ip_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "offender", "@element" -> object_value, null)),
         "@element" ~= "^[0-9]{1,3}([.][0-9]{1,3}){3}$"),
-    _offender_hostname_seq = arrayfilter(arraymap(participants -> [], if(
+    tmp_offender_hostname_seq = arrayfilter(arraymap(participants -> [], if(
         "@element" -> role = "offender" and "@element" -> hostname != null, "@element" -> hostname,
         "@element" -> role = "offender" and "@element" -> object_value != null
             and not("@element" -> object_value ~= "^[0-9]{1,3}([.][0-9]{1,3}){3}$"), "@element" -> object_value,
         null)), "@element" != null),
-    _offender_username_seq = arrayfilter(arraymap(participants -> [],
+    tmp_offender_username_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "offender", "@element" -> username, null)),
         "@element" != null),
-    _offender_external_seq = arrayfilter(arraymap(participants -> [],
+    tmp_offender_external_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "offender", "@element" -> external, null)),
         "@element" != null),
-    _offender_object_id_seq = arrayfilter(arraymap(participants -> [],
+    tmp_offender_object_id_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "offender", to_string("@element" -> object_id), null)),
         "@element" != null),
-    _victim_role_marks = arrayfilter(arraymap(participants -> [],
+    tmp_victim_role_marks = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "victim", "1", null)), "@element" != null),
-    _victim_ip_seq = arrayfilter(arraymap(participants -> [],
+    tmp_victim_ip_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "victim", "@element" -> object_value, null)),
         "@element" ~= "^[0-9]{1,3}([.][0-9]{1,3}){3}$"),
-    _victim_hostname_seq = arrayfilter(arraymap(participants -> [], if(
+    tmp_victim_hostname_seq = arrayfilter(arraymap(participants -> [], if(
         "@element" -> role = "victim" and "@element" -> hostname != null, "@element" -> hostname,
         "@element" -> role = "victim" and "@element" -> object_value != null
             and not("@element" -> object_value ~= "^[0-9]{1,3}([.][0-9]{1,3}){3}$"), "@element" -> object_value,
         null)), "@element" != null),
-    _victim_username_seq = arrayfilter(arraymap(participants -> [],
+    tmp_victim_username_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "victim", "@element" -> username, null)),
         "@element" != null),
-    _victim_external_seq = arrayfilter(arraymap(participants -> [],
+    tmp_victim_external_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "victim", "@element" -> external, null)),
         "@element" != null),
-    _victim_object_id_seq = arrayfilter(arraymap(participants -> [],
+    tmp_victim_object_id_seq = arrayfilter(arraymap(participants -> [],
         if("@element" -> role = "victim", to_string("@element" -> object_id), null)),
         "@element" != null)
 
 // Stage 2a -- LEAF temps (depend on stage-1 outputs, not each other).
 | alter
-    _offender_count = array_length(_offender_role_marks),
-    _victim_count = array_length(_victim_role_marks),
-    _offender_ip_first = arrayindex(_offender_ip_seq, 0),
-    _offender_hostname_first = arrayindex(_offender_hostname_seq, 0),
-    _offender_username_first = arrayindex(_offender_username_seq, 0),
-    _offender_external_first = arrayindex(_offender_external_seq, 0),
-    _offender_object_id_first = arrayindex(_offender_object_id_seq, 0),
-    _victim_ip_first = arrayindex(_victim_ip_seq, 0),
-    _victim_hostname_first = arrayindex(_victim_hostname_seq, 0),
-    _victim_username_first = arrayindex(_victim_username_seq, 0),
-    _victim_external_first = arrayindex(_victim_external_seq, 0),
-    _victim_object_id_first = arrayindex(_victim_object_id_seq, 0),
-    _duration_ms = to_integer(subtract(to_number(_end_ms), to_number(_start_ms))),
+    tmp_offender_count = array_length(tmp_offender_role_marks),
+    tmp_victim_count = array_length(tmp_victim_role_marks),
+    tmp_offender_ip_first = arrayindex(tmp_offender_ip_seq, 0),
+    tmp_offender_hostname_first = arrayindex(tmp_offender_hostname_seq, 0),
+    tmp_offender_username_first = arrayindex(tmp_offender_username_seq, 0),
+    tmp_offender_external_first = arrayindex(tmp_offender_external_seq, 0),
+    tmp_offender_object_id_first = arrayindex(tmp_offender_object_id_seq, 0),
+    tmp_victim_ip_first = arrayindex(tmp_victim_ip_seq, 0),
+    tmp_victim_hostname_first = arrayindex(tmp_victim_hostname_seq, 0),
+    tmp_victim_username_first = arrayindex(tmp_victim_username_seq, 0),
+    tmp_victim_external_first = arrayindex(tmp_victim_external_seq, 0),
+    tmp_victim_object_id_first = arrayindex(tmp_victim_object_id_seq, 0),
+    tmp_duration_ms = to_integer(subtract(to_number(tmp_end_ms), to_number(tmp_start_ms))),
     // Pre-derive banded severity / log level for single-line drains.
-    _severity = if(
-        _risk_score >= 80, "Critical",
-        _risk_score >= 50, "High",
-        _risk_score >= 30, "Medium",
-        _risk_score != null, "Low"),
-    _log_level = if(
-        _risk_score >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
-        _risk_score >= 50, XDM_CONST.LOG_LEVEL_ERROR,
-        _risk_score >= 30, XDM_CONST.LOG_LEVEL_WARNING,
-        _risk_score != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
-    _risk_band = if(_risk_score >= 70, "HIGH",
-                    _risk_score >= 30, "MEDIUM",
-                    _risk_score != null, "LOW"),
-    _category_const = arrayindex(arrayfilter(arraymap(_categories_arr, if(
+    tmp_severity = if(
+        tmp_risk_score >= 80, "Critical",
+        tmp_risk_score >= 50, "High",
+        tmp_risk_score >= 30, "Medium",
+        tmp_risk_score != null, "Low"),
+    tmp_log_level = if(
+        tmp_risk_score >= 80, XDM_CONST.LOG_LEVEL_CRITICAL,
+        tmp_risk_score >= 50, XDM_CONST.LOG_LEVEL_ERROR,
+        tmp_risk_score >= 30, XDM_CONST.LOG_LEVEL_WARNING,
+        tmp_risk_score != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
+    tmp_risk_band = if(tmp_risk_score >= 70, "HIGH",
+                    tmp_risk_score >= 30, "MEDIUM",
+                    tmp_risk_score != null, "LOW"),
+    tmp_category_const = arrayindex(arrayfilter(arraymap(tmp_categories_arr, if(
         "@element" ~= "(?i)brute",       XDM_CONST.THREAT_CATEGORY_BRUTE_FORCE,
         "@element" ~= "(?i)phish",       XDM_CONST.THREAT_CATEGORY_PHISHING,
         "@element" ~= "(?i)dos|ddos",    XDM_CONST.THREAT_CATEGORY_DOS,
@@ -217,7 +217,7 @@ alter
         "@element" ~= "(?i)post.?expl",  XDM_CONST.THREAT_CATEGORY_POST_EXPLOITATION,
         "@element" ~= "(?i)protocol",    XDM_CONST.THREAT_CATEGORY_PROTOCOL_ANOMALY)),
         "@element" != null), 0),
-    _mitre_tactics_const = arraymap(_mitre_tactic_ids, if(
+    tmp_mitre_tactics_const = arraymap(tmp_mitre_tactic_ids, if(
         "@element" = "TA0001", XDM_CONST.MITRE_TACTIC_INITIAL_ACCESS,
         "@element" = "TA0002", XDM_CONST.MITRE_TACTIC_EXECUTION,
         "@element" = "TA0003", XDM_CONST.MITRE_TACTIC_PERSISTENCE,
@@ -232,7 +232,7 @@ alter
         "@element" = "TA0040", XDM_CONST.MITRE_TACTIC_IMPACT,
         "@element" = "TA0042", XDM_CONST.MITRE_TACTIC_RESOURCE_DEVELOPMENT,
         "@element" = "TA0043", XDM_CONST.MITRE_TACTIC_RECONNAISSANCE)),
-    _mitre_techniques_const = arraymap(_mitre_technique_ids, if(
+    tmp_mitre_techniques_const = arraymap(tmp_mitre_technique_ids, if(
         "@element" = "T1078", XDM_CONST.MITRE_TECHNIQUE_VALID_ACCOUNTS,
         "@element" = "T1098", XDM_CONST.MITRE_TECHNIQUE_ACCOUNT_MANIPULATION,
         "@element" = "T1110", XDM_CONST.MITRE_TECHNIQUE_BRUTE_FORCE,
@@ -246,92 +246,92 @@ alter
 
 // Stage 2b -- DEPENDENT temps (reference 2a outputs only).
 | alter
-    _source_is_internal = if(
-        _offender_count > 0 and to_boolean(_offender_external_first) = true, to_boolean("false"),
-        _offender_count > 0 and to_boolean(_offender_external_first) = false, to_boolean("true")),
-    _target_is_internal = if(
-        _victim_count > 0 and to_boolean(_victim_external_first) = true, to_boolean("false"),
-        _victim_count > 0 and to_boolean(_victim_external_first) = false, to_boolean("true"),
-        _victim_count = 0 and _offender_count > 0 and to_boolean(_offender_external_first) = true, to_boolean("false"),
-        _victim_count = 0 and _offender_count > 0 and to_boolean(_offender_external_first) = false, to_boolean("true")),
-    _target_ip_first = if(_victim_count > 0, _victim_ip_first, _offender_ip_first),
-    _target_hostname_first = if(_victim_count > 0, _victim_hostname_first, _offender_hostname_first),
-    _target_username_first = if(_victim_count > 0, _victim_username_first, _offender_username_first),
-    _target_ip_arr = if(_victim_count > 0, _victim_ip_seq, _offender_ip_seq),
-    _source_device_id = if(_offender_count > 0,
-        if(_offender_ip_first != null, null,
-            if(_offender_hostname_first != null, null, _offender_object_id_first)),
+    tmp_source_is_internal = if(
+        tmp_offender_count > 0 and to_boolean(tmp_offender_external_first) = true, to_boolean("false"),
+        tmp_offender_count > 0 and to_boolean(tmp_offender_external_first) = false, to_boolean("true")),
+    tmp_target_is_internal = if(
+        tmp_victim_count > 0 and to_boolean(tmp_victim_external_first) = true, to_boolean("false"),
+        tmp_victim_count > 0 and to_boolean(tmp_victim_external_first) = false, to_boolean("true"),
+        tmp_victim_count = 0 and tmp_offender_count > 0 and to_boolean(tmp_offender_external_first) = true, to_boolean("false"),
+        tmp_victim_count = 0 and tmp_offender_count > 0 and to_boolean(tmp_offender_external_first) = false, to_boolean("true")),
+    tmp_target_ip_first = if(tmp_victim_count > 0, tmp_victim_ip_first, tmp_offender_ip_first),
+    tmp_target_hostname_first = if(tmp_victim_count > 0, tmp_victim_hostname_first, tmp_offender_hostname_first),
+    tmp_target_username_first = if(tmp_victim_count > 0, tmp_victim_username_first, tmp_offender_username_first),
+    tmp_target_ip_arr = if(tmp_victim_count > 0, tmp_victim_ip_seq, tmp_offender_ip_seq),
+    tmp_source_device_id = if(tmp_offender_count > 0,
+        if(tmp_offender_ip_first != null, null,
+            if(tmp_offender_hostname_first != null, null, tmp_offender_object_id_first)),
         null),
-    _target_device_id = if(_victim_count > 0,
-        if(_victim_ip_first != null, null,
-            if(_victim_hostname_first != null, null, _victim_object_id_first)),
-        if(_offender_count > 0,
-            if(_offender_ip_first != null, null,
-                if(_offender_hostname_first != null, null, _offender_object_id_first)),
+    tmp_target_device_id = if(tmp_victim_count > 0,
+        if(tmp_victim_ip_first != null, null,
+            if(tmp_victim_hostname_first != null, null, tmp_victim_object_id_first)),
+        if(tmp_offender_count > 0,
+            if(tmp_offender_ip_first != null, null,
+                if(tmp_offender_hostname_first != null, null, tmp_offender_object_id_first)),
             null)),
-    _description = concat(
-        coalesce(_alert_title, "RevealX detection"),
-        if(_risk_band != null, concat(" | Risk band: ", _risk_band), ""),
-        if(_categories_arr != null, concat(" | Categories: ", arraystring(_categories_arr, ", ")), ""),
-        if(_offender_username_first != null, concat(" | Offender user: ", _offender_username_first), ""),
-        if(_offender_ip_first != null, concat(" | Offender IP: ", _offender_ip_first), ""),
-        if(_victim_ip_first != null, concat(" | Victim IP: ", _victim_ip_first), ""))
+    tmp_description = concat(
+        coalesce(tmp_alert_title, "RevealX detection"),
+        if(tmp_risk_band != null, concat(" | Risk band: ", tmp_risk_band), ""),
+        if(tmp_categories_arr != null, concat(" | Categories: ", arraystring(tmp_categories_arr, ", ")), ""),
+        if(tmp_offender_username_first != null, concat(" | Offender user: ", tmp_offender_username_first), ""),
+        if(tmp_offender_ip_first != null, concat(" | Offender IP: ", tmp_offender_ip_first), ""),
+        if(tmp_victim_ip_first != null, concat(" | Victim IP: ", tmp_victim_ip_first), ""))
 
 | alter
     xdm.observer.vendor = "ExtraHop",
     xdm.observer.product = "RevealX",
-    xdm.event.id = _event_id,
+    xdm.event.id = tmp_event_id,
     xdm.event.type = "ALERT",
-    xdm.event.original_event_type = _event_type,
+    xdm.event.original_event_type = tmp_event_type,
     xdm.event.outcome = XDM_CONST.OUTCOME_UNKNOWN,
-    xdm.event.duration = _duration_ms,
-    xdm.event.description = _description,
-    xdm.alert.original_alert_id = _event_id,
-    xdm.alert.name = _alert_title,
-    xdm.alert.original_threat_name = _alert_title,
-    xdm.alert.description = _alert_description,
-    xdm.alert.subcategory = _risk_event_name,
-    xdm.alert.source_url = _alert_url,
-    xdm.alert.category = _category_const,
-    xdm.alert.severity = _severity,
-    xdm.alert.risks = if(_risk_band != null, arraycreate(_risk_band), null),
-    xdm.event.log_level = _log_level,
-    xdm.alert.mitre_tactics = _mitre_tactics_const,
-    xdm.alert.mitre_techniques = _mitre_techniques_const,
+    xdm.event.duration = tmp_duration_ms,
+    xdm.event.description = tmp_description,
+    xdm.alert.original_alert_id = tmp_event_id,
+    xdm.alert.name = tmp_alert_title,
+    xdm.alert.original_threat_name = tmp_alert_title,
+    xdm.alert.description = tmp_alert_description,
+    xdm.alert.subcategory = tmp_risk_event_name,
+    xdm.alert.source_url = tmp_alert_url,
+    xdm.alert.category = tmp_category_const,
+    xdm.alert.severity = tmp_severity,
+    xdm.alert.risks = if(tmp_risk_band != null, arraycreate(tmp_risk_band), null),
+    xdm.event.log_level = tmp_log_level,
+    xdm.alert.mitre_tactics = tmp_mitre_tactics_const,
+    xdm.alert.mitre_techniques = tmp_mitre_techniques_const,
     // Source side -- the offender drives source.*. Empty when zero offenders.
-    xdm.source.ipv4 = _offender_ip_first,
-    xdm.source.host.ipv4_addresses = _offender_ip_seq,
-    xdm.source.host.hostname = _offender_hostname_first,
-    xdm.source.host.device_id = _source_device_id,
-    xdm.source.user.upn = _offender_username_first,
-    xdm.source.user.username = _offender_username_first,
-    xdm.source.user.user_type = if(_offender_username_first != null,
+    xdm.source.ipv4 = tmp_offender_ip_first,
+    xdm.source.host.ipv4_addresses = tmp_offender_ip_seq,
+    xdm.source.host.hostname = tmp_offender_hostname_first,
+    xdm.source.host.device_id = tmp_source_device_id,
+    xdm.source.user.upn = tmp_offender_username_first,
+    xdm.source.user.username = tmp_offender_username_first,
+    xdm.source.user.user_type = if(tmp_offender_username_first != null,
         XDM_CONST.USER_TYPE_REGULAR, null),
-    xdm.source.user.identity_type = if(_offender_username_first != null,
+    xdm.source.user.identity_type = if(tmp_offender_username_first != null,
         XDM_CONST.IDENTITY_TYPE_USER, null),
-    xdm.source.is_internal_ip = _source_is_internal,
+    xdm.source.is_internal_ip = tmp_source_is_internal,
     // Target side -- victim drives target.* when present; otherwise mirror
     // the offender so single-sided detections still correlate from either side.
-    xdm.target.ipv4 = _target_ip_first,
-    xdm.target.host.ipv4_addresses = _target_ip_arr,
-    xdm.target.host.hostname = _target_hostname_first,
-    xdm.target.host.device_id = _target_device_id,
-    xdm.target.user.upn = _target_username_first,
-    xdm.target.user.username = _target_username_first,
-    xdm.target.user.user_type = if(_target_username_first != null,
+    xdm.target.ipv4 = tmp_target_ip_first,
+    xdm.target.host.ipv4_addresses = tmp_target_ip_arr,
+    xdm.target.host.hostname = tmp_target_hostname_first,
+    xdm.target.host.device_id = tmp_target_device_id,
+    xdm.target.user.upn = tmp_target_username_first,
+    xdm.target.user.username = tmp_target_username_first,
+    xdm.target.user.user_type = if(tmp_target_username_first != null,
         XDM_CONST.USER_TYPE_REGULAR, null),
-    xdm.target.user.identity_type = if(_target_username_first != null,
+    xdm.target.user.identity_type = if(tmp_target_username_first != null,
         XDM_CONST.IDENTITY_TYPE_USER, null),
-    xdm.target.is_internal_ip = _target_is_internal,
-    xdm.intermediate.host.device_id = _appliance_id;
+    xdm.target.is_internal_ip = tmp_target_is_internal,
+    xdm.intermediate.host.device_id = tmp_appliance_id;
 ```
 
 ## Key decisions called out
 
-- Per-scalar projection, not struct binding. Each scalar from the `offender` participant gets its OWN `arraymap(participants -> [], if(...role = "offender", "@element" -> <field>, null))`. You do NOT write `_offender = arrayindex(arrayfilter(... role = "offender"), 0)` and then `_offender -> field` -- that's ERR-017 (struct passthrough), rejected by the Cortex parser.
-- Two-stage temp derivation. Stage 2a derives LEAF temps that depend only on stage-1 outputs (the `_*_first` scalars, the `_severity` and `_log_level` bands). Stage 2b derives DEPENDENT temps that consume 2a outputs (the mirroring logic, the device-id fallback chain, the composite description). This respects parser idiom (xi) -- no sibling-temp-in-same-alter reads.
-- Banded `_risk_score`, never raw. `_risk_score` is a numeric 0-99 scale. The rule bands to four `xdm.alert.severity` strings AND to four `XDM_CONST.LOG_LEVEL_*` values. Assigning the raw integer to `xdm.alert.severity` would silently break severity-filter queries downstream -- see failure-mode #7 in [failure-modes.md](../failure-modes.md).
-- Categorical enum routing for `categories`. `_category_const` walks the `categories` array via `arraymap` + `arrayfilter`, matching each element against case-insensitive regex patterns and emitting the corresponding `XDM_CONST.THREAT_CATEGORY_*`. First non-null wins. Raw text fallback goes to `xdm.alert.subcategory` via `_risk_event_name`.
+- Per-scalar projection, not struct binding. Each scalar from the `offender` participant gets its OWN `arraymap(participants -> [], if(...role = "offender", "@element" -> <field>, null))`. You do NOT write `tmp_offender = arrayindex(arrayfilter(... role = "offender"), 0)` and then `tmp_offender -> field` -- that's ERR-017 (struct passthrough), rejected by the Cortex parser.
+- Two-stage temp derivation. Stage 2a derives LEAF temps that depend only on stage-1 outputs (the `_*tmp_first` scalars, the `tmp_severity` and `tmp_log_level` bands). Stage 2b derives DEPENDENT temps that consume 2a outputs (the mirroring logic, the device-id fallback chain, the composite description). This respects parser idiom (xi) -- no sibling-temp-in-same-alter reads.
+- Banded `tmp_risk_score`, never raw. `tmp_risk_score` is a numeric 0-99 scale. The rule bands to four `xdm.alert.severity` strings AND to four `XDM_CONST.LOG_LEVEL_*` values. Assigning the raw integer to `xdm.alert.severity` would silently break severity-filter queries downstream -- see failure-mode #7 in [failure-modes.md](../failure-modes.md).
+- Categorical enum routing for `categories`. `tmp_category_const` walks the `categories` array via `arraymap` + `arrayfilter`, matching each element against case-insensitive regex patterns and emitting the corresponding `XDM_CONST.THREAT_CATEGORY_*`. First non-null wins. Raw text fallback goes to `xdm.alert.subcategory` via `tmp_risk_event_name`.
 - MITRE only when the vendor provides it. `mitre_tactics` and `mitre_techniques` are mapped only when the vendor includes explicit TA*/T* IDs. The rule maps each ID to the corresponding `XDM_CONST.MITRE_*` constant -- it does NOT speculate on vendor-text fields.
 - Victim-or-mirror target selection. When a `victim` participant exists, `target.*` is driven by the victim. When ZERO victims exist but offenders do, `target.*` mirrors the offender (single-sided detection -- both sides resolve to the same actor so correlation queries find it from either side). When neither role exists, `target.*` stays null.
 - `device_id` fallback chain. When a participant has neither an IP nor a hostname (an unresolved object), `to_string(object_id)` goes into `xdm.{source,target}.host.device_id` so the entity is still queryable.

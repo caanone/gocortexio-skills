@@ -12,7 +12,7 @@ Covers the XQL language as used in data model rules (`[MODEL: dataset=..._raw]`)
 - First stage after the header has NO leading pipe. Write `filter` or `alter`, not `| filter` or `| alter`. All subsequent stages DO use a leading pipe.
 - The entire rule MUST end with a semicolon (`;`). The last field assignment before the semicolon must NOT have a trailing comma.
 - Dataset names in the header are NOT quoted. Write `dataset=name_raw` not `dataset="name_raw"`.
-- Intermediary (temporary) variables are prefixed with underscore, e.g. `_client_ip`, `_sender_addr`. Every intermediary variable MUST be consumed in a subsequent assignment or passed to another intermediary that is itself consumed. Unused intermediaries cause a BLOCKING validation error: "Data Model Rules contains unused fields".
+- Intermediary (temporary) variables are prefixed with underscore, e.g. `tmp_client_ip`, `tmp_sender_addr`. Every intermediary variable MUST be consumed in a subsequent assignment or passed to another intermediary that is itself consumed. Unused intermediaries cause a BLOCKING validation error: "Data Model Rules contains unused fields".
 
 See [parser-idioms.md](parser-idioms.md) for the twelve non-negotiable parser idioms.
 
@@ -31,7 +31,7 @@ json_extract_scalar(to_string(imperva), "$.risk_reason")
 Returns an ARRAY of capture group matches. Always wrap with `arrayindex(..., 0)` to get the first match.
 
 ```
-_host = arrayindex(regextract(_raw_log, ">\w+\s+\d+\s+[\d:]+\s+(\S+)\s+accesslogs"), 0)
+tmp_host = arrayindex(regextract(_raw_log, ">\w+\s+\d+\s+[\d:]+\s+(\S+)\s+accesslogs"), 0)
 ```
 
 ### `split(string, "delimiter")`
@@ -39,7 +39,7 @@ _host = arrayindex(regextract(_raw_log, ">\w+\s+\d+\s+[\d:]+\s+(\S+)\s+accesslog
 Splits a string into an array by delimiter.
 
 ```
-_parts = split(_stripped_log, " ")
+tmp_parts = split(tmp_stripped_log, " ")
 ```
 
 ### `arrayindex(array, index)`
@@ -47,7 +47,7 @@ _parts = split(_stripped_log, " ")
 Returns the element at the given 0-based index from an array.
 
 ```
-_client_ip = arrayindex(_parts, 2)
+tmp_client_ip = arrayindex(tmp_parts, 2)
 ```
 
 ### `arraycreate(value1, value2, ...)`
@@ -55,7 +55,7 @@ _client_ip = arrayindex(_parts, 2)
 Creates an array from scalar values. REQUIRED for Array-type XDM fields.
 
 ```
-xdm.email.recipients = arraycreate(_recipient)
+xdm.email.recipients = arraycreate(tmp_recipient)
 ```
 
 ### `arraymap(array, expression)`
@@ -99,7 +99,7 @@ Returns the number of elements in the array.
 Extracts an array from a JSON string. Use instead of `json_extract_scalar` when the target value is a JSON array and the XDM field type is Array.
 
 ```
-_ip_list = json_extract_array(_raw_log, "$.network.ip_addresses")
+tmp_ip_list = json_extract_array(_raw_log, "$.network.ip_addresses")
 ```
 
 ## Transformation functions
@@ -109,7 +109,7 @@ _ip_list = json_extract_array(_raw_log, "$.network.ip_addresses")
 Returns the first non-null value.
 
 ```
-_sender_ip = coalesce(senderIp, SourceIP)
+tmp_sender_ip = coalesce(senderIp, SourceIP)
 ```
 
 ### `concat(str1, str2, ...)`
@@ -117,7 +117,7 @@ _sender_ip = coalesce(senderIp, SourceIP)
 Concatenates strings.
 
 ```
-xdm.event.description = concat("Event: ", _type, " from ", _sender)
+xdm.event.description = concat("Event: ", tmp_type, " from ", tmp_sender)
 ```
 
 ### `to_string(value)`
@@ -125,7 +125,7 @@ xdm.event.description = concat("Event: ", _type, " from ", _sender)
 Converts to string. REQUIRED before passing `arrayindex()` output to `split()` or `regextract()`.
 
 ```
-_sub_a = arrayindex(split(to_string(_result_status), "/"), 0)
+tmp_sub_a = arrayindex(split(to_string(tmp_result_status), "/"), 0)
 ```
 
 ### `to_number(string)` / `to_integer(string)` / `to_float(value)` / `to_boolean(value)`
@@ -133,7 +133,7 @@ _sub_a = arrayindex(split(to_string(_result_status), "/"), 0)
 Type conversions. `to_number()` returns a float -- integer XDM fields (duration, port, bytes, packets, pid) MUST be wrapped in `to_integer()`. See [parser-idioms.md](parser-idioms.md) idiom (iv) / ERR-015.
 
 ```
-xdm.event.duration = to_integer(to_number(_ms))
+xdm.event.duration = to_integer(to_number(tmp_ms))
 ```
 
 ### `to_json_string(value)`
@@ -145,7 +145,7 @@ Converts a value to a JSON string representation.
 Case conversion.
 
 ```
-_normalised_action = lowercase(_action_type)
+tmp_normalised_action = lowercase(tmp_action_type)
 ```
 
 ### `incidr(ip_string, "cidr_range")`
@@ -154,9 +154,9 @@ Returns true if the IP address falls within the specified CIDR range. Use for fi
 
 ```
 xdm.source.is_internal_ip = if(
-    incidr(_src_ip, "10.0.0.0/8") or
-    incidr(_src_ip, "172.16.0.0/12") or
-    incidr(_src_ip, "192.168.0.0/16"),
+    incidr(tmp_src_ip, "10.0.0.0/8") or
+    incidr(tmp_src_ip, "172.16.0.0/12") or
+    incidr(tmp_src_ip, "192.168.0.0/16"),
     true, false)
 ```
 
@@ -185,7 +185,7 @@ Parses epoch timestamp string to Timestamp type. `from_epoch` does NOT exist in 
 Infix arithmetic inside `alter` is BANNED -- Cortex parser rejects it with a cascade of generic "parse error" lines. See [parser-idioms.md](parser-idioms.md) idiom (i) / ERR-012.
 
 ```
-xdm.event.duration = to_integer(subtract(to_number(_end_ms), to_number(_start_ms)))
+xdm.event.duration = to_integer(subtract(to_number(tmp_end_ms), to_number(tmp_start_ms)))
 ```
 
 ## Arrow operator (`->`)
@@ -221,11 +221,11 @@ Do NOT combine null-comparisons with `and` / `or` inside `if()` predicates. Drop
 
 ```
 // BANNED
-if(_a != null and _b != null, subtract(_b, _a), null)
+if(tmp_a != null and tmp_b != null, subtract(tmp_b, tmp_a), null)
 
 // allowed
-subtract(_b, _a)
+subtract(tmp_b, tmp_a)
 
 // allowed (nested guards)
-if(_a != null, if(_b != null, subtract(_b, _a), null), null)
+if(tmp_a != null, if(tmp_b != null, subtract(tmp_b, tmp_a), null), null)
 ```

@@ -5,7 +5,7 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _flag = json_extract_scalar(_raw_log, "$.is_active")
+    tmp_flag = json_extract_scalar(_raw_log, "$.is_active")
 | alter
     xdm.event.description = if(json_extract_scalar(_raw_log, "$.is_active") = true, "yes", "no")
 ;

@@ -53,58 +53,58 @@ Gaps: FortiGate traffic logs carry no IPv6 pair, no HTTP header, and no target d
 filter
     _raw_log != null
 | alter
-    _action = json_extract_scalar(_raw_log, "$.action"),
-    _proto = json_extract_scalar(_raw_log, "$.proto"),
-    _src_ip = json_extract_scalar(_raw_log, "$.srcip"),
-    _src_port = json_extract_scalar(_raw_log, "$.srcport"),
-    _dst_ip = json_extract_scalar(_raw_log, "$.dstip"),
-    _dst_port = json_extract_scalar(_raw_log, "$.dstport"),
-    _sent = json_extract_scalar(_raw_log, "$.sentbyte"),
-    _rcvd = json_extract_scalar(_raw_log, "$.rcvdbyte"),
-    _devid = json_extract_scalar(_raw_log, "$.devid"),
-    _catdesc = json_extract_scalar(_raw_log, "$.catdesc")
+    tmp_action = json_extract_scalar(_raw_log, "$.action"),
+    tmp_proto = json_extract_scalar(_raw_log, "$.proto"),
+    tmp_src_ip = json_extract_scalar(_raw_log, "$.srcip"),
+    tmp_src_port = json_extract_scalar(_raw_log, "$.srcport"),
+    tmp_dst_ip = json_extract_scalar(_raw_log, "$.dstip"),
+    tmp_dst_port = json_extract_scalar(_raw_log, "$.dstport"),
+    tmp_sent = json_extract_scalar(_raw_log, "$.sentbyte"),
+    tmp_rcvd = json_extract_scalar(_raw_log, "$.rcvdbyte"),
+    tmp_devid = json_extract_scalar(_raw_log, "$.devid"),
+    tmp_catdesc = json_extract_scalar(_raw_log, "$.catdesc")
 | alter
     xdm.observer.vendor = "Fortinet",
     xdm.observer.product = "FortiGate",
     xdm.event.type = "network",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
     xdm.event.outcome = if(
-        _action = "accept", XDM_CONST.OUTCOME_SUCCESS,
-        _action != null, XDM_CONST.OUTCOME_FAILED,
+        tmp_action = "accept", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_action != null, XDM_CONST.OUTCOME_FAILED,
         XDM_CONST.OUTCOME_UNKNOWN),
     xdm.network.ip_protocol = if(
-        _proto = "tcp", XDM_CONST.IP_PROTOCOL_TCP,
-        _proto = "udp", XDM_CONST.IP_PROTOCOL_UDP,
-        _proto = "icmp", XDM_CONST.IP_PROTOCOL_ICMP,
+        tmp_proto = "tcp", XDM_CONST.IP_PROTOCOL_TCP,
+        tmp_proto = "udp", XDM_CONST.IP_PROTOCOL_UDP,
+        tmp_proto = "icmp", XDM_CONST.IP_PROTOCOL_ICMP,
         XDM_CONST.IP_PROTOCOL_IP),
     xdm.network.protocol_layers = if(
-        _proto != null, arraycreate(uppercase(_proto)),
+        tmp_proto != null, arraycreate(uppercase(tmp_proto)),
         arraycreate("TCP")),
     xdm.network.http.http_header.header = "",
     xdm.network.http.http_header.value = "",
     xdm.network.http.url_category = if(
-        _catdesc = "Business and Economy", XDM_CONST.URL_CATEGORY_BUSINESS_AND_ECONOMY,
-        _catdesc = "Search Engines", XDM_CONST.URL_CATEGORY_SEARCH_ENGINES,
+        tmp_catdesc = "Business and Economy", XDM_CONST.URL_CATEGORY_BUSINESS_AND_ECONOMY,
+        tmp_catdesc = "Search Engines", XDM_CONST.URL_CATEGORY_SEARCH_ENGINES,
         XDM_CONST.URL_CATEGORY_UNKNOWN),
-    xdm.source.ipv4 = _src_ip,
+    xdm.source.ipv4 = tmp_src_ip,
     xdm.source.ipv6 = "",
     xdm.source.is_internal_ip = if(
-        incidr(_src_ip, "10.0.0.0/8"), true,
-        incidr(_src_ip, "172.16.0.0/12"), true,
-        incidr(_src_ip, "192.168.0.0/16"), true,
+        incidr(tmp_src_ip, "10.0.0.0/8"), true,
+        incidr(tmp_src_ip, "172.16.0.0/12"), true,
+        incidr(tmp_src_ip, "192.168.0.0/16"), true,
         false),
-    xdm.source.port = to_integer(to_number(_src_port)),
-    xdm.source.sent_bytes = to_integer(to_number(_sent)),
-    xdm.source.host.device_id = _devid,
-    xdm.target.ipv4 = _dst_ip,
+    xdm.source.port = to_integer(to_number(tmp_src_port)),
+    xdm.source.sent_bytes = to_integer(to_number(tmp_sent)),
+    xdm.source.host.device_id = tmp_devid,
+    xdm.target.ipv4 = tmp_dst_ip,
     xdm.target.ipv6 = "",
     xdm.target.is_internal_ip = if(
-        incidr(_dst_ip, "10.0.0.0/8"), true,
-        incidr(_dst_ip, "172.16.0.0/12"), true,
-        incidr(_dst_ip, "192.168.0.0/16"), true,
+        incidr(tmp_dst_ip, "10.0.0.0/8"), true,
+        incidr(tmp_dst_ip, "172.16.0.0/12"), true,
+        incidr(tmp_dst_ip, "192.168.0.0/16"), true,
         false),
-    xdm.target.port = to_integer(to_number(_dst_port)),
-    xdm.target.sent_bytes = to_integer(to_number(_rcvd)),
+    xdm.target.port = to_integer(to_number(tmp_dst_port)),
+    xdm.target.sent_bytes = to_integer(to_number(tmp_rcvd)),
     xdm.target.host.device_id = ""
 ;
 ```
@@ -128,75 +128,75 @@ the same 20-field block as the JSON rule.
 filter
     _raw_log != null
 | alter
-    _pri        = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
-    _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
-    _host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+    tmp_pri        = to_integer(to_number(arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0))),
+    tmp_host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
+    tmp_host_3164  = arrayindex(regextract(_raw_log, "^<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
-    _syslog_host_raw = coalesce(_host_5424, _host_3164)
+    tmp_syslog_host_raw = coalesce(tmp_host_5424, tmp_host_3164)
 | alter
-    _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
+    tmp_syslog_host = if(tmp_syslog_host_raw != "-", tmp_syslog_host_raw)
 | alter
-    _pri_facility = to_integer(divide(_pri, 8))
+    tmp_pri_facility = to_integer(divide(tmp_pri, 8))
 | alter
-    _pri_severity = to_integer(subtract(_pri, multiply(_pri_facility, 8)))
+    tmp_pri_severity = to_integer(subtract(tmp_pri, multiply(tmp_pri_facility, 8)))
 | alter
-    _pri_log_level = if(
-        _pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
-        _pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
-        _pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
-        _pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
-        _pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
+    tmp_pri_log_level = if(
+        tmp_pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
+        tmp_pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
+        tmp_pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
+        tmp_pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
+        tmp_pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL)
 | alter
-    _action = arrayindex(regextract(_raw_log, "action=(\w+)"), 0),
-    _proto = arrayindex(regextract(_raw_log, "proto=(\w+)"), 0),
-    _src_ip = arrayindex(regextract(_raw_log, "srcip=([\d.]+)"), 0),
-    _src_port = arrayindex(regextract(_raw_log, "srcport=(\d+)"), 0),
-    _dst_ip = arrayindex(regextract(_raw_log, "dstip=([\d.]+)"), 0),
-    _dst_port = arrayindex(regextract(_raw_log, "dstport=(\d+)"), 0),
-    _sent = arrayindex(regextract(_raw_log, "sentbyte=(\d+)"), 0),
-    _rcvd = arrayindex(regextract(_raw_log, "rcvdbyte=(\d+)"), 0),
-    _devid = arrayindex(regextract(_raw_log, "devid=(\w+)"), 0)
+    tmp_action = arrayindex(regextract(_raw_log, "action=(\w+)"), 0),
+    tmp_proto = arrayindex(regextract(_raw_log, "proto=(\w+)"), 0),
+    tmp_src_ip = arrayindex(regextract(_raw_log, "srcip=([\d.]+)"), 0),
+    tmp_src_port = arrayindex(regextract(_raw_log, "srcport=(\d+)"), 0),
+    tmp_dst_ip = arrayindex(regextract(_raw_log, "dstip=([\d.]+)"), 0),
+    tmp_dst_port = arrayindex(regextract(_raw_log, "dstport=(\d+)"), 0),
+    tmp_sent = arrayindex(regextract(_raw_log, "sentbyte=(\d+)"), 0),
+    tmp_rcvd = arrayindex(regextract(_raw_log, "rcvdbyte=(\d+)"), 0),
+    tmp_devid = arrayindex(regextract(_raw_log, "devid=(\w+)"), 0)
 | alter
     xdm.observer.vendor = "Fortinet",
     xdm.observer.product = "FortiGate",
-    xdm.observer.name = _syslog_host,
-    xdm.event.log_level = _pri_log_level,
+    xdm.observer.name = tmp_syslog_host,
+    xdm.event.log_level = tmp_pri_log_level,
     xdm.event.type = "network",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
     xdm.event.outcome = if(
-        _action = "accept", XDM_CONST.OUTCOME_SUCCESS,
-        _action != null, XDM_CONST.OUTCOME_FAILED,
+        tmp_action = "accept", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_action != null, XDM_CONST.OUTCOME_FAILED,
         XDM_CONST.OUTCOME_UNKNOWN),
     xdm.network.ip_protocol = if(
-        _proto = "tcp", XDM_CONST.IP_PROTOCOL_TCP,
-        _proto = "udp", XDM_CONST.IP_PROTOCOL_UDP,
-        _proto = "icmp", XDM_CONST.IP_PROTOCOL_ICMP,
+        tmp_proto = "tcp", XDM_CONST.IP_PROTOCOL_TCP,
+        tmp_proto = "udp", XDM_CONST.IP_PROTOCOL_UDP,
+        tmp_proto = "icmp", XDM_CONST.IP_PROTOCOL_ICMP,
         XDM_CONST.IP_PROTOCOL_IP),
     xdm.network.protocol_layers = if(
-        _proto != null, arraycreate(uppercase(_proto)),
+        tmp_proto != null, arraycreate(uppercase(tmp_proto)),
         arraycreate("TCP")),
     xdm.network.http.http_header.header = "",
     xdm.network.http.http_header.value = "",
     xdm.network.http.url_category = XDM_CONST.URL_CATEGORY_UNKNOWN,
-    xdm.source.ipv4 = _src_ip,
+    xdm.source.ipv4 = tmp_src_ip,
     xdm.source.ipv6 = "",
     xdm.source.is_internal_ip = if(
-        incidr(_src_ip, "10.0.0.0/8"), true,
-        incidr(_src_ip, "172.16.0.0/12"), true,
-        incidr(_src_ip, "192.168.0.0/16"), true,
+        incidr(tmp_src_ip, "10.0.0.0/8"), true,
+        incidr(tmp_src_ip, "172.16.0.0/12"), true,
+        incidr(tmp_src_ip, "192.168.0.0/16"), true,
         false),
-    xdm.source.port = to_integer(to_number(_src_port)),
-    xdm.source.sent_bytes = to_integer(to_number(_sent)),
-    xdm.source.host.device_id = _devid,
-    xdm.target.ipv4 = _dst_ip,
+    xdm.source.port = to_integer(to_number(tmp_src_port)),
+    xdm.source.sent_bytes = to_integer(to_number(tmp_sent)),
+    xdm.source.host.device_id = tmp_devid,
+    xdm.target.ipv4 = tmp_dst_ip,
     xdm.target.ipv6 = "",
     xdm.target.is_internal_ip = if(
-        incidr(_dst_ip, "10.0.0.0/8"), true,
-        incidr(_dst_ip, "172.16.0.0/12"), true,
-        incidr(_dst_ip, "192.168.0.0/16"), true,
+        incidr(tmp_dst_ip, "10.0.0.0/8"), true,
+        incidr(tmp_dst_ip, "172.16.0.0/12"), true,
+        incidr(tmp_dst_ip, "192.168.0.0/16"), true,
         false),
-    xdm.target.port = to_integer(to_number(_dst_port)),
-    xdm.target.sent_bytes = to_integer(to_number(_rcvd)),
+    xdm.target.port = to_integer(to_number(tmp_dst_port)),
+    xdm.target.sent_bytes = to_integer(to_number(tmp_rcvd)),
     xdm.target.host.device_id = ""
 ;
 ```
@@ -238,33 +238,33 @@ the network story keys on the tag.
 filter
     _raw_log != null
 | alter
-    _event = json_extract_scalar(_raw_log, "$.eventtype"),
-    _user = json_extract_scalar(_raw_log, "$.user"),
-    _rem_ip = json_extract_scalar(_raw_log, "$.remip"),
-    _rem_port = json_extract_scalar(_raw_log, "$.remport"),
-    _devid = json_extract_scalar(_raw_log, "$.devid"),
-    _result = json_extract_scalar(_raw_log, "$.result")
+    tmp_event = json_extract_scalar(_raw_log, "$.eventtype"),
+    tmp_user = json_extract_scalar(_raw_log, "$.user"),
+    tmp_rem_ip = json_extract_scalar(_raw_log, "$.remip"),
+    tmp_rem_port = json_extract_scalar(_raw_log, "$.remport"),
+    tmp_devid = json_extract_scalar(_raw_log, "$.devid"),
+    tmp_result = json_extract_scalar(_raw_log, "$.result")
 | alter
     xdm.observer.vendor = "Fortinet",
     xdm.observer.product = "FortiGate",
     xdm.event.type = "authentication",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION, XDM_CONST.EVENT_TAG_VPN, XDM_CONST.EVENT_TAG_NETWORK),
-    xdm.event.original_event_type = _event,
+    xdm.event.original_event_type = tmp_event,
     xdm.event.operation = XDM_CONST.OPERATION_TYPE_AUTH_LOGIN,
     xdm.event.outcome = if(
-        _result = "success", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_result = "success", XDM_CONST.OUTCOME_SUCCESS,
         XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = "SSL-VPN",
     xdm.source.user.upn = if(
-        _user contains "@", _user,
-        _user != null, concat(_user, "@localhost")),
+        tmp_user contains "@", tmp_user,
+        tmp_user != null, concat(tmp_user, "@localhost")),
     xdm.source.user.identity_type = if(
-        _user != null, XDM_CONST.IDENTITY_TYPE_USER,
+        tmp_user != null, XDM_CONST.IDENTITY_TYPE_USER,
         XDM_CONST.IDENTITY_TYPE_UNKNOWN),
     xdm.source.user.user_type = if(
-        _user = null, XDM_CONST.USER_TYPE_REGULAR,
-        _user contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_user) ~= "^svc[-_.]|service|gserviceaccount",
+        tmp_user = null, XDM_CONST.USER_TYPE_REGULAR,
+        tmp_user contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(tmp_user) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_IP,
@@ -272,14 +272,14 @@ filter
     xdm.network.http.http_header.header = "",
     xdm.network.http.http_header.value = "",
     xdm.network.http.url_category = XDM_CONST.URL_CATEGORY_UNKNOWN,
-    xdm.source.ipv4 = _rem_ip,
+    xdm.source.ipv4 = tmp_rem_ip,
     xdm.source.ipv6 = "",
     xdm.source.is_internal_ip = if(
-        incidr(_rem_ip, "10.0.0.0/8"), true,
-        incidr(_rem_ip, "172.16.0.0/12"), true,
-        incidr(_rem_ip, "192.168.0.0/16"), true,
+        incidr(tmp_rem_ip, "10.0.0.0/8"), true,
+        incidr(tmp_rem_ip, "172.16.0.0/12"), true,
+        incidr(tmp_rem_ip, "192.168.0.0/16"), true,
         false),
-    xdm.source.port = to_integer(to_number(_rem_port)),
+    xdm.source.port = to_integer(to_number(tmp_rem_port)),
     xdm.source.sent_bytes = to_integer(0),
     xdm.source.host.device_id = "",
     xdm.target.ipv4 = "",
@@ -287,7 +287,7 @@ filter
     xdm.target.is_internal_ip = true,
     xdm.target.port = to_integer(443),
     xdm.target.sent_bytes = to_integer(0),
-    xdm.target.host.device_id = _devid
+    xdm.target.host.device_id = tmp_devid
 ;
 ```
 

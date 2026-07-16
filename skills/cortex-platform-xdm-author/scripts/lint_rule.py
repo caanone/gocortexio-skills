@@ -26,6 +26,8 @@ Structural and parser-conformance checks:
     WARN-015 Quoted dataset name in the MODEL header.
     WARN-017 Leading pipe on the first stage after the MODEL header.
     WARN-018 _time assigned in a MODEL rule.
+    ERR-028  A skill-authored scratch temp uses the reserved _ prefix; it
+             must use tmp_ (the _ namespace is platform/system-only).
     INFO-012 Cascade root-cause hint when two parser-conformance violations land adjacent.
 
 Schema-aware checks (XDM schema + XDM_CONST loaded from references):
@@ -329,9 +331,10 @@ def _rhs_is_array_typed(rhs: str, known_array_vars: set) -> bool:
 def _analyse_dataflow(code_lines: List[str]) -> dict:
     """Return ``{"defs": [...], "reachable": set, "array_typed": set}``.
 
-    ``defs`` is a list of ``{name, line (1-indexed), is_underscore,
-    rhs_text}``. Mirrors the engine's analyseDataflow exactly so the
-    bundle linter's verdicts match the full engine offline.
+    ``defs`` is a list of ``{name, line (1-indexed), is_temp,
+    rhs_text}`` (is_temp = a tmp_-prefixed scratch temp). Mirrors the
+    engine's analyseDataflow exactly so the bundle linter's verdicts
+    match the full engine offline.
     """
     all_parts: List[str] = []
     for raw in code_lines:
@@ -373,7 +376,7 @@ def _analyse_dataflow(code_lines: List[str]) -> dict:
         if name in _DF_RESERVED or name in _DF_STAGE_WORDS:
             continue
         defs.append(
-            {"name": name, "line": i + 1, "is_underscore": name.startswith("_"), "rhs_text": ""}
+            {"name": name, "line": i + 1, "is_temp": name.startswith("tmp_"), "rhs_text": ""}
         )
 
     real_def_lines = {d["line"] - 1 for d in defs}
@@ -832,7 +835,7 @@ def _check_err024(
         name = m.group(1)
         if name in _STAGE_KEYWORDS or name in ("_time", "_raw_log"):
             continue
-        kind = "xdm" if name.startswith("xdm.") else ("_temp" if name.startswith("_") else "bare")
+        kind = "xdm" if name.startswith("xdm.") else ("_temp" if name.startswith("tmp_") else "bare")
         slots.append(
             {
                 "name": name,
@@ -928,6 +931,14 @@ _RESERVED_UNDERSCORE = {
 
 _USCORE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])(_[A-Za-z]\w*)")
 _USCORE_LHS = re.compile(r"^\s*(_[A-Za-z]\w*)\s*=(?!=)")
+
+# Skill-authored scratch temps use the tmp_ prefix. The _ prefix is
+# reserved by the platform for internal / system fields (_raw_log, _time,
+# ...), so a rule must never CREATE a _-prefixed field -- ERR-028 blocks
+# that, and _USCORE_LHS above stays purely to detect it. The dataflow
+# checks (ERR-019 / 024 / 025 / 027, INFO-013) track tmp_ temps via these.
+_TEMP_TOKEN = re.compile(r"(?<![A-Za-z0-9_])(tmp_[A-Za-z0-9_]+)")
+_TEMP_LHS = re.compile(r"^\s*(tmp_[A-Za-z0-9_]+)\s*=(?!=)")
 _ASSIGN_START = re.compile(r"^\s*[\w.]+\s*=(?!=)")
 
 
@@ -954,7 +965,7 @@ def _check_err027(
                 depth = max(0, depth - 1)
         if stage_of[i] != "alter" or start_depth > 0:
             continue
-        m = _USCORE_LHS.match(cp)
+        m = _TEMP_LHS.match(cp)
         if not m:
             continue
         slots.append({"name": m.group(1), "line": i, "stage_start": stage_start[i]})
@@ -979,7 +990,7 @@ def _check_err027(
     for s in slots:
         assigned.add(s["name"])
         rhs = "\n".join(cleaned[s["line"]: s["rhs_end"] + 1])
-        rhs = re.sub(r"^\s*_[A-Za-z]\w*\s*=", "", rhs, count=1)
+        rhs = re.sub(r"^\s*[A-Za-z_]\w*\s*=", "", rhs, count=1)
         self_ref = re.search(
             r"(?<![A-Za-z0-9_])" + re.escape(s["name"]) + r"(?![A-Za-z0-9_])",
             rhs,
@@ -987,14 +998,14 @@ def _check_err027(
         if not self_ref:
             produced_clean.add(s["name"])
 
-    # 3. Reads: every underscore token that is not the single LHS token
-    #    of its own line, recorded at first occurrence.
+    # 3. Reads: every tmp_ token that is not the single LHS token of its
+    #    own line, recorded at first occurrence.
     first_read_line: dict = {}
     for i, cp in enumerate(cleaned):
-        lhs = _USCORE_LHS.match(cp)
+        lhs = _TEMP_LHS.match(cp)
         lhs_name = lhs.group(1) if lhs else None
         lhs_skipped = False
-        for m in _USCORE_TOKEN.finditer(cp):
+        for m in _TEMP_TOKEN.finditer(cp):
             name = m.group(1)
             if name == lhs_name and not lhs_skipped:
                 lhs_skipped = True
@@ -1068,7 +1079,7 @@ def _check_err019(code_lines: List[str], df: dict) -> List[dict]:
     out: List[dict] = []
     seen: set = set()
     for d in df["defs"]:
-        if not d["is_underscore"] or d["name"] in seen:
+        if not d["is_temp"] or d["name"] in seen:
             continue
         seen.add(d["name"])
         if d["name"] in df["reachable"]:
@@ -1138,8 +1149,8 @@ def _check_err025(code_lines: List[str]) -> List[dict]:
                 pd = max(0, pd - 1)
         if start_depth > 0:
             continue
-        m = re.match(r"^\s*(_[A-Za-z]\w*)\s*=", cp)
-        if not m or m.group(1) in ("_time", "_raw_log"):
+        m = _TEMP_LHS.match(cp)
+        if not m:
             continue
         defs.append({"name": m.group(1), "line": i + 1})
     if not defs:
@@ -1344,6 +1355,42 @@ def _check_warn018(code_lines: List[str]) -> List[dict]:
                     "Remove the _time assignment.",
                 )
             )
+    return out
+
+
+# ----- ERR-028  reserved _ namespace: skill temps must use the tmp_ prefix
+
+
+def _check_err028(code_lines: List[str]) -> List[dict]:
+    """A skill-authored scratch temp must use the ``tmp_`` prefix. The ``_``
+    prefix is reserved by the platform for internal / system-generated
+    fields (``_raw_log``, ``_time``, ``_message``, ...), so a rule must never
+    CREATE a ``_``-prefixed field. Fires on any alter-stage LHS that assigns
+    a ``_``-prefixed name; ``_time`` is exempt here because WARN-018 already
+    governs the (also forbidden) ``_time`` assignment."""
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        m = _USCORE_LHS.match(_strip_line_comment(raw))
+        if not m or m.group(1) == "_time":
+            continue
+        name = m.group(1)
+        out.append(
+            _violation(
+                "ERR-028",
+                "error",
+                i + 1,
+                f"'{name}' assigns a _-prefixed field. The _ prefix is "
+                "reserved for platform / system-generated fields (_raw_log, "
+                "_time, _message, ...); a skill-authored scratch temp must "
+                "use the tmp_ prefix.",
+                f"Rename '{name}' to 'tmp{name}' throughout the rule "
+                f"(every definition and every read of '{name}').",
+            )
+        )
     return out
 
 
@@ -1675,7 +1722,7 @@ def _check_info013(code_lines: List[str]) -> List[dict]:
         cat = parts[1] if len(parts) > 1 else a["path"]
         if cat in metadata_cats:
             continue
-        for m in _USCORE_TOKEN.finditer(a["rhs"]):
+        for m in _TEMP_TOKEN.finditer(a["rhs"]):
             name = m.group(1)
             temp_cats.setdefault(name, set()).add(cat)
             temp_line.setdefault(name, a["line"])
@@ -2822,6 +2869,7 @@ def lint(source: str) -> List[dict]:
     findings += _check_err024(code_lines, stage_of, stage_start)
     findings += _check_err025(code_lines)
     findings += _check_err027(code_lines, stage_of, stage_start)
+    findings += _check_err028(code_lines)
     findings += _check_warn014(code_lines)
     findings += _check_warn015(code_lines)
     findings += _check_warn017(code_lines)

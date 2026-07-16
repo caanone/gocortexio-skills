@@ -5,8 +5,8 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _a = json_extract_scalar(_raw_log, "$.a"),
-    _b = concat(_a, "-suffix")
+    tmp_a = json_extract_scalar(_raw_log, "$.a"),
+    tmp_b = concat(tmp_a, "-suffix")
 | alter
-    xdm.event.description = _b
+    xdm.event.description = tmp_b
 ;

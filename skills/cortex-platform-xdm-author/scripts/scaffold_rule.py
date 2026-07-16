@@ -5,8 +5,8 @@
 
 Turn a profile_log.py worksheet into a complete starter MODEL rule. The
 output is a deterministic, lint-clean `[MODEL: dataset=..._raw]` skeleton:
-a MAPPED-header comment block, an extraction stage with one `_temp` per
-mapped leaf, and an XDM drain stage wired from the worksheet's ranked
+a MAPPED-header comment block, an extraction stage with one `tmp_` temp
+per mapped leaf, and an XDM drain stage wired from the worksheet's ranked
 anchor candidates. Same worksheet in -> same rule out.
 
 It is a starting point, not a finished rule. The drain stage covers the
@@ -69,37 +69,37 @@ _DEFAULT_MIN_FREQUENCY = 3
 # Body extraction (Stages 1+) MUST anchor on the payload's own token, never
 # on ^ or a fixed offset, so it too matches both arrival forms.
 _SYSLOG_STAGE0 = r"""| alter
-    _pri        = to_integer(to_number(coalesce(arrayindex(regextract(_raw_log, "^.*<(\d{1,3})>[A-Za-z]{3}\s+\d+\s+[\d:]+"), 0), arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0)))),
-    _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
-    _host_3164  = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+    tmp_pri        = to_integer(to_number(coalesce(arrayindex(regextract(_raw_log, "^.*<(\d{1,3})>[A-Za-z]{3}\s+\d+\s+[\d:]+"), 0), arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0)))),
+    tmp_host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
+    tmp_host_3164  = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
-    _syslog_host_raw = coalesce(_host_5424, _host_3164)
+    tmp_syslog_host_raw = coalesce(tmp_host_5424, tmp_host_3164)
 | alter
-    _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
+    tmp_syslog_host = if(tmp_syslog_host_raw != "-", tmp_syslog_host_raw)
 | alter
-    _pri_facility = to_integer(divide(_pri, 8))
+    tmp_pri_facility = to_integer(divide(tmp_pri, 8))
 | alter
-    _pri_severity = to_integer(subtract(_pri, multiply(_pri_facility, 8)))
+    tmp_pri_severity = to_integer(subtract(tmp_pri, multiply(tmp_pri_facility, 8)))
 | alter
-    _pri_log_level = if(
-        _pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
-        _pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
-        _pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
-        _pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
-        _pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
-    _pri_sev_band = if(
-        _pri_severity <= 2, "Critical",
-        _pri_severity = 3,  "High",
-        _pri_severity = 4,  "Medium",
-        _pri_severity != null, "Low")"""
+    tmp_pri_log_level = if(
+        tmp_pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
+        tmp_pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
+        tmp_pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
+        tmp_pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
+        tmp_pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
+    tmp_pri_sev_band = if(
+        tmp_pri_severity <= 2, "Critical",
+        tmp_pri_severity = 3,  "High",
+        tmp_pri_severity = 4,  "Medium",
+        tmp_pri_severity != null, "Low")"""
 
 # Envelope-derived drains. severity / log_level are seeded from the
 # priority fallback only; the author upgrades each to
-# coalesce(<payload field>, _pri_*) once the payload severity is parsed.
+# coalesce(<payload field>, tmp_pri_*) once the payload severity is parsed.
 _SYSLOG_DRAINS = [
-    "    xdm.observer.name = _syslog_host",
-    "    xdm.event.log_level = _pri_log_level",
-    "    xdm.alert.severity = _pri_sev_band",
+    "    xdm.observer.name = tmp_syslog_host",
+    "    xdm.event.log_level = tmp_pri_log_level",
+    "    xdm.alert.severity = tmp_pri_sev_band",
 ]
 _SYSLOG_ENVELOPE_TARGETS = {
     "xdm.observer.name",
@@ -154,13 +154,13 @@ _AUTH_MUST_EXTRACT = [
      "the event kind is unclear"),
     ("xdm.source.user.upn",
      "authenticated identity, ALWAYS UPN-shaped; when the raw value may "
-     'be bare use if(_u contains "@", _u, _u != null, '
-     'concat(_u, "@localhost"))'),
+     'be bare use if(tmp_u contains "@", tmp_u, tmp_u != null, '
+     'concat(tmp_u, "@localhost"))'),
     ("xdm.source.ipv4",
      "real client source IP from the raw log (never static, empty, or a list)"),
     ("xdm.event.original_event_type",
      "raw vendor event name exactly as logged; for the catch-all default "
-     'it to the sentinel: coalesce(_vendor_event_type, "GOCORTEX_UNMODELLED")'),
+     'it to the sentinel: coalesce(tmp_vendor_event_type, "GOCORTEX_UNMODELLED")'),
     ("xdm.event.outcome",
      "XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED, on conclusive events only"),
 ]
@@ -215,9 +215,11 @@ _NETWORK_MUST_EXTRACT = [
 
 
 def _sanitise_temp(leaf: str, used: set) -> str:
-    """Build a unique ``_identifier`` from a leaf name."""
+    """Build a unique ``tmp_identifier`` from a leaf name. Skill scratch
+    temps use the ``tmp_`` prefix; the ``_`` prefix is reserved by the
+    platform for internal / system fields (ERR-028)."""
     base = re.sub(r"[^a-z0-9]+", "_", leaf.lower()).strip("_") or "field"
-    name = "_" + base
+    name = "tmp_" + base
     if name not in used:
         used.add(name)
         return name
@@ -521,6 +523,14 @@ def _provenance_lines() -> List[str]:
     model = _clean_env(os.environ.get("GOCORTEX_SKILLS_MODEL", "unknown"))
     skill_name = _clean_env(os.environ.get("GOCORTEX_SKILLS_SKILL_NAME", name))
     skill_ver = _clean_env(os.environ.get("GOCORTEX_SKILLS_SKILL_VERSION", ver))
+    # Whether a source reference (OpenAPI spec, vendor mnemonic doc, ...)
+    # informed the mapping, or only the raw sample was available. The
+    # scaffolder sees only the sample, so it defaults to "sample-only"; the
+    # author overrides to "spec-backed" (env or edit) once a reference is
+    # used. A greppable audit signal for lower-confidence, review-worthy rules.
+    basis = _clean_env(
+        os.environ.get("GOCORTEX_SKILLS_SOURCE_BASIS", "sample-only")
+    )
     return [
         "//",
         "// Generated via",
@@ -528,6 +538,7 @@ def _provenance_lines() -> List[str]:
         f'// GOCORTEX_SKILLS_SKILL_NAME="{skill_name}"',
         f'// GOCORTEX_SKILLS_SKILL_VERSION="{skill_ver}"',
         f'// GOCORTEX_SKILLS_SKILL_WARNING_COUNT="{_WARN_COUNT_PLACEHOLDER}"',
+        f'// GOCORTEX_SKILLS_SOURCE_BASIS="{basis}"',
     ]
 
 
@@ -647,7 +658,7 @@ def _build_header(
             "+ host); see references/syslog-envelope.md. log_level and "
             "severity are seeded from the priority as a FALLBACK only -- once "
             "the payload severity is parsed, upgrade each to "
-            "coalesce(<payload field>, _pri_log_level)."
+            "coalesce(<payload field>, tmp_pri_log_level)."
         )
         lines.append("//")
         lines.append(

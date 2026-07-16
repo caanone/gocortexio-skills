@@ -26,7 +26,7 @@ General rules that keep extraction clean:
   group as an array; wrap it in `arrayindex(..., 0)` to get the scalar.
 - Anchor the value, not the noise: capture `([^\s]+)` (or a typed shape
   like an IPv4 octet quad) rather than greedy `.*`.
-- Coerce numerics: `to_integer(to_number(_port))`; wrap an array leaf in
+- Coerce numerics: `to_integer(to_number(tmp_port))`; wrap an array leaf in
   `arraycreate(...)`.
 - For a `<NNN>` priority syslog envelope, decode the header once with the
   canonical Stage 0 idiom in [syslog-envelope.md](syslog-envelope.md)
@@ -43,11 +43,11 @@ double-quoted (the most common syslog/kv shape).
 filter
     _raw_log != null
 | alter
-    _user = arrayindex(regextract(_raw_log, "\buser=([^\s]+)"), 0),
-    _msg = arrayindex(regextract(_raw_log, "msg=\"([^\"]*)\""), 0)
+    tmp_user = arrayindex(regextract(_raw_log, "\buser=([^\s]+)"), 0),
+    tmp_msg = arrayindex(regextract(_raw_log, "msg=\"([^\"]*)\""), 0)
 | alter
-    xdm.source.user.username = _user,
-    xdm.event.description = _msg
+    xdm.source.user.username = tmp_user,
+    xdm.event.description = tmp_msg
 ;
 ```
 
@@ -66,13 +66,13 @@ optional `:port` suffix.
 filter
     _raw_log != null
 | alter
-    _src_ip = arrayindex(regextract(_raw_log, "src=(\d{1,3}(?:\.\d{1,3}){3})"), 0),
-    _src_port = arrayindex(regextract(_raw_log, "src=\d{1,3}(?:\.\d{1,3}){3}:(\d{1,5})"), 0),
-    _dst_ip = arrayindex(regextract(_raw_log, "dst=(\d{1,3}(?:\.\d{1,3}){3})"), 0)
+    tmp_src_ip = arrayindex(regextract(_raw_log, "src=(\d{1,3}(?:\.\d{1,3}){3})"), 0),
+    tmp_src_port = arrayindex(regextract(_raw_log, "src=\d{1,3}(?:\.\d{1,3}){3}:(\d{1,5})"), 0),
+    tmp_dst_ip = arrayindex(regextract(_raw_log, "dst=(\d{1,3}(?:\.\d{1,3}){3})"), 0)
 | alter
-    xdm.source.ipv4 = _src_ip,
-    xdm.source.port = to_integer(to_number(_src_port)),
-    xdm.target.ipv4 = _dst_ip
+    xdm.source.ipv4 = tmp_src_ip,
+    xdm.source.port = to_integer(to_number(tmp_src_port)),
+    xdm.target.ipv4 = tmp_dst_ip
 ;
 ```
 
@@ -91,11 +91,11 @@ The header is pipe-delimited; the extension is key=value (use Recipe 1).
 filter
     _raw_log != null
 | alter
-    _cef_name = arrayindex(split(_raw_log, "|"), 5),
-    _suser = arrayindex(regextract(_raw_log, "suser=([^\s]+)"), 0)
+    tmp_cef_name = arrayindex(split(_raw_log, "|"), 5),
+    tmp_suser = arrayindex(regextract(_raw_log, "suser=([^\s]+)"), 0)
 | alter
-    xdm.event.original_event_type = _cef_name,
-    xdm.source.user.username = _suser
+    xdm.event.original_event_type = tmp_cef_name,
+    xdm.source.user.username = tmp_suser
 ;
 ```
 
@@ -115,11 +115,11 @@ Header is pipe-delimited; the eventid is index 4.
 filter
     _raw_log != null
 | alter
-    _leef_evt = arrayindex(split(_raw_log, "|"), 4),
-    _usr = arrayindex(regextract(_raw_log, "usrName=([^\s\t]+)"), 0)
+    tmp_leef_evt = arrayindex(split(_raw_log, "|"), 4),
+    tmp_usr = arrayindex(regextract(_raw_log, "usrName=([^\s\t]+)"), 0)
 | alter
-    xdm.event.original_event_type = _leef_evt,
-    xdm.source.user.username = _usr
+    xdm.event.original_event_type = tmp_leef_evt,
+    xdm.source.user.username = tmp_usr
 ;
 ```
 
@@ -143,13 +143,13 @@ position-independent (see the HARD RULE in syslog-envelope.md).
 filter
     _raw_log != null
 | alter
-    _host = arrayindex(regextract(_raw_log, "^.*(?:<\d{1,3}>)?[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0),
-    _proc = arrayindex(regextract(_raw_log, "(\w+)\[\d+\]:"), 0),
-    _pid = arrayindex(regextract(_raw_log, "\[(\d+)\]:"), 0)
+    tmp_host = arrayindex(regextract(_raw_log, "^.*(?:<\d{1,3}>)?[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0),
+    tmp_proc = arrayindex(regextract(_raw_log, "(\w+)\[\d+\]:"), 0),
+    tmp_pid = arrayindex(regextract(_raw_log, "\[(\d+)\]:"), 0)
 | alter
-    xdm.observer.name = _host,
-    xdm.source.process.name = _proc,
-    xdm.source.process.pid = to_integer(to_number(_pid))
+    xdm.observer.name = tmp_host,
+    xdm.source.process.name = tmp_proc,
+    xdm.source.process.pid = to_integer(to_number(tmp_pid))
 ;
 ```
 
@@ -169,13 +169,13 @@ an email/UPN). Capture the token shape, not its position.
 filter
     _raw_log != null
 | alter
-    _ip = arrayindex(regextract(_raw_log, "\b(\d{1,3}(?:\.\d{1,3}){3})\b"), 0),
-    _mac = arrayindex(regextract(_raw_log, "\b([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\b"), 0),
-    _email = arrayindex(regextract(_raw_log, "\b([\w.+-]+@[\w.-]+\.\w+)\b"), 0)
+    tmp_ip = arrayindex(regextract(_raw_log, "\b(\d{1,3}(?:\.\d{1,3}){3})\b"), 0),
+    tmp_mac = arrayindex(regextract(_raw_log, "\b([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\b"), 0),
+    tmp_email = arrayindex(regextract(_raw_log, "\b([\w.+-]+@[\w.-]+\.\w+)\b"), 0)
 | alter
-    xdm.source.ipv4 = _ip,
-    xdm.source.host.mac_addresses = arraycreate(_mac),
-    xdm.source.user.upn = _email
+    xdm.source.ipv4 = tmp_ip,
+    xdm.source.host.mac_addresses = arraycreate(tmp_mac),
+    xdm.source.user.upn = tmp_email
 ;
 ```
 
@@ -198,11 +198,11 @@ sit inside the token, and the principal follows as `User <name>`.
 filter
     _raw_log != null
 | alter
-    _sros_event = arrayindex(regextract(_raw_log, "Base \w+-\w+-(\w+)"), 0),
-    _sros_user = arrayindex(regextract(_raw_log, "\bUser (\S+)"), 0)
+    tmp_sros_event = arrayindex(regextract(_raw_log, "Base \w+-\w+-(\w+)"), 0),
+    tmp_sros_user = arrayindex(regextract(_raw_log, "\bUser (\S+)"), 0)
 | alter
-    xdm.event.original_event_type = _sros_event,
-    xdm.source.user.username = _sros_user
+    xdm.event.original_event_type = tmp_sros_event,
+    xdm.source.user.username = tmp_sros_user
 ;
 ```
 
@@ -229,13 +229,13 @@ value.
 filter
     _raw_log != null
 | alter
-    _ios_event = arrayindex(regextract(_raw_log, "%([\w]+-\d-\w+):"), 0),
-    _ios_user = arrayindex(regextract(_raw_log, "\[user: ?([^\]]+)\]"), 0),
-    _ios_src = arrayindex(regextract(_raw_log, "\[Source: ?(\d{1,3}(?:\.\d{1,3}){3})\]"), 0)
+    tmp_ios_event = arrayindex(regextract(_raw_log, "%([\w]+-\d-\w+):"), 0),
+    tmp_ios_user = arrayindex(regextract(_raw_log, "\[user: ?([^\]]+)\]"), 0),
+    tmp_ios_src = arrayindex(regextract(_raw_log, "\[Source: ?(\d{1,3}(?:\.\d{1,3}){3})\]"), 0)
 | alter
-    xdm.event.original_event_type = _ios_event,
-    xdm.source.user.username = _ios_user,
-    xdm.source.ipv4 = _ios_src
+    xdm.event.original_event_type = tmp_ios_event,
+    xdm.source.user.username = tmp_ios_user,
+    xdm.source.ipv4 = tmp_ios_src
 ;
 ```
 
@@ -260,13 +260,13 @@ trailing comma, so anchor the value on `[^,)]+` instead.
 filter
     _raw_log != null
 | alter
-    _vrp_event = arrayindex(regextract(_raw_log, "%%\d*\w+/\d/(\w+)"), 0),
-    _vrp_user = arrayindex(regextract(_raw_log, "UserName=([^,)]+)"), 0),
-    _vrp_ip = arrayindex(regextract(_raw_log, "IPAddress=([^,)]+)"), 0)
+    tmp_vrp_event = arrayindex(regextract(_raw_log, "%%\d*\w+/\d/(\w+)"), 0),
+    tmp_vrp_user = arrayindex(regextract(_raw_log, "UserName=([^,)]+)"), 0),
+    tmp_vrp_ip = arrayindex(regextract(_raw_log, "IPAddress=([^,)]+)"), 0)
 | alter
-    xdm.event.original_event_type = _vrp_event,
-    xdm.source.user.username = _vrp_user,
-    xdm.source.ipv4 = _vrp_ip
+    xdm.event.original_event_type = tmp_vrp_event,
+    xdm.source.user.username = tmp_vrp_user,
+    xdm.source.ipv4 = tmp_vrp_ip
 ;
 ```
 
@@ -292,15 +292,15 @@ not merely because the URL path contains "login").
 filter
     _raw_log != null
 | alter
-    _clf_ip = arrayindex(regextract(_raw_log, "^(\d{1,3}(?:\.\d{1,3}){3})"), 0),
-    _clf_method = arrayindex(regextract(_raw_log, "\"(\w+) \S+ HTTP/\d"), 0),
-    _clf_url = arrayindex(regextract(_raw_log, "\"\w+ (\S+) HTTP/\d"), 0),
-    _clf_ua = arrayindex(regextract(_raw_log, "\"([^\"]*)\"\s*$"), 0)
+    tmp_clf_ip = arrayindex(regextract(_raw_log, "^(\d{1,3}(?:\.\d{1,3}){3})"), 0),
+    tmp_clf_method = arrayindex(regextract(_raw_log, "\"(\w+) \S+ HTTP/\d"), 0),
+    tmp_clf_url = arrayindex(regextract(_raw_log, "\"\w+ (\S+) HTTP/\d"), 0),
+    tmp_clf_ua = arrayindex(regextract(_raw_log, "\"([^\"]*)\"\s*$"), 0)
 | alter
-    xdm.source.ipv4 = _clf_ip,
-    xdm.network.http.method = _clf_method,
-    xdm.network.http.url = _clf_url,
-    xdm.source.user_agent = _clf_ua
+    xdm.source.ipv4 = tmp_clf_ip,
+    xdm.network.http.method = tmp_clf_method,
+    xdm.network.http.url = tmp_clf_url,
+    xdm.source.user_agent = tmp_clf_ua
 ;
 ```
 
@@ -329,13 +329,13 @@ a relay it gains `<PRI>Mon DD HH:MM:SS relay-host wlc:` in front.
 filter
     _raw_log != null
 | alter
-    _wlc_host     = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0),
-    _wlc_mnemonic = arrayindex(regextract(_raw_log, "%(\w+-\d-\w+):"), 0),
-    _wlc_mac      = arrayindex(regextract(_raw_log, "for mobile ([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})"), 0)
+    tmp_wlc_host     = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0),
+    tmp_wlc_mnemonic = arrayindex(regextract(_raw_log, "%(\w+-\d-\w+):"), 0),
+    tmp_wlc_mac      = arrayindex(regextract(_raw_log, "for mobile ([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})"), 0)
 | alter
-    xdm.observer.name = _wlc_host,
-    xdm.event.original_event_type = _wlc_mnemonic,
-    xdm.source.host.mac_addresses = arraycreate(_wlc_mac)
+    xdm.observer.name = tmp_wlc_host,
+    xdm.event.original_event_type = tmp_wlc_mnemonic,
+    xdm.source.host.mac_addresses = arraycreate(tmp_wlc_mac)
 ;
 ```
 

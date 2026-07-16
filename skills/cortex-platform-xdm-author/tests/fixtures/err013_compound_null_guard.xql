@@ -5,8 +5,8 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _a = json_extract_scalar(_raw_log, "$.a"),
-    _b = json_extract_scalar(_raw_log, "$.b")
+    tmp_a = json_extract_scalar(_raw_log, "$.a"),
+    tmp_b = json_extract_scalar(_raw_log, "$.b")
 | alter
-    xdm.event.description = if(_a != null and _b != null, concat(_a, _b), null)
+    xdm.event.description = if(tmp_a != null and tmp_b != null, concat(tmp_a, tmp_b), null)
 ;

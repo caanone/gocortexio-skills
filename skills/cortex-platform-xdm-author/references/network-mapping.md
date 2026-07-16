@@ -167,51 +167,51 @@ extraction -- see [syslog-envelope.md](syslog-envelope.md).)
 filter
     _raw_log != null
 | alter
-    _action = json_extract_scalar(_raw_log, "$.action"),
-    _proto = json_extract_scalar(_raw_log, "$.protocol"),
-    _src_ip = json_extract_scalar(_raw_log, "$.src_ip"),
-    _src_port = json_extract_scalar(_raw_log, "$.src_port"),
-    _dst_ip = json_extract_scalar(_raw_log, "$.dst_ip"),
-    _dst_port = json_extract_scalar(_raw_log, "$.dst_port"),
-    _bytes_out = json_extract_scalar(_raw_log, "$.bytes_sent"),
-    _bytes_in = json_extract_scalar(_raw_log, "$.bytes_received")
+    tmp_action = json_extract_scalar(_raw_log, "$.action"),
+    tmp_proto = json_extract_scalar(_raw_log, "$.protocol"),
+    tmp_src_ip = json_extract_scalar(_raw_log, "$.src_ip"),
+    tmp_src_port = json_extract_scalar(_raw_log, "$.src_port"),
+    tmp_dst_ip = json_extract_scalar(_raw_log, "$.dst_ip"),
+    tmp_dst_port = json_extract_scalar(_raw_log, "$.dst_port"),
+    tmp_bytes_out = json_extract_scalar(_raw_log, "$.bytes_sent"),
+    tmp_bytes_in = json_extract_scalar(_raw_log, "$.bytes_received")
 | alter
     xdm.event.type = "network",
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_NETWORK),
     xdm.event.outcome = if(
-        _action = "allow", XDM_CONST.OUTCOME_SUCCESS,
-        _action != null, XDM_CONST.OUTCOME_FAILED,
+        tmp_action = "allow", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_action != null, XDM_CONST.OUTCOME_FAILED,
         XDM_CONST.OUTCOME_UNKNOWN),
     xdm.network.ip_protocol = if(
-        _proto = "tcp", XDM_CONST.IP_PROTOCOL_TCP,
-        _proto = "udp", XDM_CONST.IP_PROTOCOL_UDP,
-        _proto = "icmp", XDM_CONST.IP_PROTOCOL_ICMP,
+        tmp_proto = "tcp", XDM_CONST.IP_PROTOCOL_TCP,
+        tmp_proto = "udp", XDM_CONST.IP_PROTOCOL_UDP,
+        tmp_proto = "icmp", XDM_CONST.IP_PROTOCOL_ICMP,
         XDM_CONST.IP_PROTOCOL_IP),
     xdm.network.protocol_layers = if(
-        _proto != null, arraycreate(uppercase(_proto)),
+        tmp_proto != null, arraycreate(uppercase(tmp_proto)),
         arraycreate("TCP")),
     xdm.network.http.http_header.header = "",
     xdm.network.http.http_header.value = "",
     xdm.network.http.url_category = XDM_CONST.URL_CATEGORY_UNKNOWN,
-    xdm.source.ipv4 = _src_ip,
+    xdm.source.ipv4 = tmp_src_ip,
     xdm.source.ipv6 = "",
     xdm.source.is_internal_ip = if(
-        incidr(_src_ip, "10.0.0.0/8"), true,
-        incidr(_src_ip, "172.16.0.0/12"), true,
-        incidr(_src_ip, "192.168.0.0/16"), true,
+        incidr(tmp_src_ip, "10.0.0.0/8"), true,
+        incidr(tmp_src_ip, "172.16.0.0/12"), true,
+        incidr(tmp_src_ip, "192.168.0.0/16"), true,
         false),
-    xdm.source.port = to_integer(to_number(_src_port)),
-    xdm.source.sent_bytes = to_integer(to_number(_bytes_out)),
+    xdm.source.port = to_integer(to_number(tmp_src_port)),
+    xdm.source.sent_bytes = to_integer(to_number(tmp_bytes_out)),
     xdm.source.host.device_id = "",
-    xdm.target.ipv4 = _dst_ip,
+    xdm.target.ipv4 = tmp_dst_ip,
     xdm.target.ipv6 = "",
     xdm.target.is_internal_ip = if(
-        incidr(_dst_ip, "10.0.0.0/8"), true,
-        incidr(_dst_ip, "172.16.0.0/12"), true,
-        incidr(_dst_ip, "192.168.0.0/16"), true,
+        incidr(tmp_dst_ip, "10.0.0.0/8"), true,
+        incidr(tmp_dst_ip, "172.16.0.0/12"), true,
+        incidr(tmp_dst_ip, "192.168.0.0/16"), true,
         false),
-    xdm.target.port = to_integer(to_number(_dst_port)),
-    xdm.target.sent_bytes = to_integer(to_number(_bytes_in)),
+    xdm.target.port = to_integer(to_number(tmp_dst_port)),
+    xdm.target.sent_bytes = to_integer(to_number(tmp_bytes_in)),
     xdm.target.host.device_id = ""
 ;
 ```

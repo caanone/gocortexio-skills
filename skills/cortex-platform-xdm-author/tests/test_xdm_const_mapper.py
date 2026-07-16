@@ -47,7 +47,7 @@ def _embed(snippet: str) -> str:
         "filter\n"
         "    _raw_log != null\n"
         "| alter\n"
-        '    _value = json_extract_scalar(_raw_log, "$.v")\n'
+        '    tmp_value = json_extract_scalar(_raw_log, "$.v")\n'
         "| alter\n"
         '    xdm.observer.vendor = "Acme",\n'
         '    xdm.event.type = "ALERT",\n'
@@ -59,7 +59,7 @@ def _embed(snippet: str) -> str:
 class TestCategorical(unittest.TestCase):
     def test_outcome_mapping(self):
         snippet, unmapped = _mapper.map_categorical(
-            "xdm.event.outcome", ["success", "failure", "partial"], "_outcome"
+            "xdm.event.outcome", ["success", "failure", "partial"], "tmp_outcome"
         )
         self.assertIn("XDM_CONST.OUTCOME_SUCCESS", snippet)
         self.assertIn("XDM_CONST.OUTCOME_FAILED", snippet)   # failure -> failed (stem)
@@ -68,7 +68,7 @@ class TestCategorical(unittest.TestCase):
 
     def test_never_invents_constant(self):
         snippet, unmapped = _mapper.map_categorical(
-            "xdm.event.outcome", ["success", "frobnicated"], "_o"
+            "xdm.event.outcome", ["success", "frobnicated"], "tmp_o"
         )
         self.assertIn("frobnicated", unmapped)
         self.assertNotIn("FROBNICATED", snippet)
@@ -76,26 +76,26 @@ class TestCategorical(unittest.TestCase):
 
     def test_http_method_exact(self):
         snippet, _ = _mapper.map_categorical(
-            "xdm.network.http.method", ["GET", "POST"], "_m"
+            "xdm.network.http.method", ["GET", "POST"], "tmp_m"
         )
         self.assertIn("XDM_CONST.HTTP_METHOD_GET", snippet)
         self.assertIn("XDM_CONST.HTTP_METHOD_POST", snippet)
 
     def test_non_const_field_raises(self):
         with self.assertRaises(ValueError):
-            _mapper.map_categorical("xdm.source.ipv4", ["x"], "_t")
+            _mapper.map_categorical("xdm.source.ipv4", ["x"], "tmp_t")
 
     def test_unknown_field_raises(self):
         with self.assertRaises(ValueError):
-            _mapper.map_categorical("xdm.not.real", ["x"], "_t")
+            _mapper.map_categorical("xdm.not.real", ["x"], "tmp_t")
 
     def test_all_unmapped_raises(self):
         with self.assertRaises(ValueError):
-            _mapper.map_categorical("xdm.event.outcome", ["zzz", "qqq"], "_t")
+            _mapper.map_categorical("xdm.event.outcome", ["zzz", "qqq"], "tmp_t")
 
     def test_snippet_embeds_lint_clean(self):
         snippet, _ = _mapper.map_categorical(
-            "xdm.event.outcome", ["success", "failure"], "_value"
+            "xdm.event.outcome", ["success", "failure"], "tmp_value"
         )
         rule = _embed(snippet)
         errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
@@ -104,22 +104,22 @@ class TestCategorical(unittest.TestCase):
 
 class TestBanded(unittest.TestCase):
     def test_banded_pairs(self):
-        out = _mapper.banded("_score", [80, 50, 30])
+        out = _mapper.banded("tmp_score", [80, 50, 30])
         self.assertIn("xdm.alert.severity = if(", out)
         self.assertIn("xdm.event.log_level = if(", out)
-        self.assertIn('_score >= 80, "Critical"', out)
+        self.assertIn('tmp_score >= 80, "Critical"', out)
         self.assertIn("XDM_CONST.LOG_LEVEL_CRITICAL", out)
-        self.assertIn('_score != null, "Low"', out)
+        self.assertIn('tmp_score != null, "Low"', out)
 
     def test_banded_embeds_lint_clean(self):
-        out = _mapper.banded("_value", [80, 50, 30])
+        out = _mapper.banded("tmp_value", [80, 50, 30])
         rule = _embed(out)
         errors = [v for v in _lint.lint(rule) if v["severity"] == "error"]
         self.assertEqual(errors, [], f"{errors}\n{rule}")
 
     def test_bad_thresholds(self):
         with self.assertRaises(ValueError):
-            _mapper.banded("_s", [80, 50])
+            _mapper.banded("tmp_s", [80, 50])
 
 
 class TestCli(unittest.TestCase):
@@ -132,13 +132,13 @@ class TestCli(unittest.TestCase):
     def test_cli_categorical(self):
         cp = self._run(
             "--field", "xdm.event.outcome", "--values", "success,failure",
-            "--temp", "_o",
+            "--temp", "tmp_o",
         )
         self.assertEqual(cp.returncode, 0, cp.stderr)
         self.assertIn("XDM_CONST.OUTCOME_SUCCESS", cp.stdout)
 
     def test_cli_banded(self):
-        cp = self._run("--banded", "--temp", "_score")
+        cp = self._run("--banded", "--temp", "tmp_score")
         self.assertEqual(cp.returncode, 0, cp.stderr)
         self.assertIn("XDM_CONST.LOG_LEVEL_CRITICAL", cp.stdout)
 

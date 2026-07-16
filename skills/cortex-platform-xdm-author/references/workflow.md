@@ -34,7 +34,30 @@ If `profile_log.py` cannot be run (no Python on the host, or the bundle has been
 - Data types: strings vs numbers vs timestamps vs IPs.
 - Event-type discrimination: does a single field split logs into different subtypes?
 
-## Step 3 -- Choose the extraction strategy
+## Step 3 -- Gather the source reference (optional, skippable)
+
+A sample shows the shape of a log, not the meaning of its fields. Once you
+know `detected_format`, ask the user once for the matching reference and
+proceed either way:
+
+- JSON / JSONL -> the OpenAPI / JSON Schema spec or API field docs. This is
+  the highest-value artifact: it gives field descriptions, authoritative
+  datatypes (array vs scalar), enum values (for `XDM_CONST` mapping) and
+  which fields carry the identity / auth story. A cryptic JSON key is a
+  guess without it.
+- syslog / positional -> the vendor message / mnemonic reference (decodes
+  `%FAC-SEV-MNEMONIC`, positional fields, severity), and confirm whether
+  the source can arrive relay-prepended (see [syslog-envelope.md](syslog-envelope.md)).
+- CEF / LEEF -> the vendor's extension dictionary. CSV / TSV -> the column
+  dictionary.
+
+Given a link, fetch and mine it; given pasted text or a file, read it. If
+none is available, proceed with the sample alone -- never block. Record the
+basis in the provenance block: `GOCORTEX_SKILLS_SOURCE_BASIS = "spec-backed"`
+when a reference informed the mapping, `"sample-only"` otherwise. A
+sample-only rule is lower-confidence and worth closer review.
+
+## Step 4 -- Choose the extraction strategy
 
 Decision tree:
 
@@ -50,7 +73,7 @@ Full pattern definitions and worked examples in [extraction-patterns.md](extract
 
 For a syslog source (`_raw_log` opens with a `<NNN>` priority token, `detected_format` of `syslog-3164` or `syslog-5424`), insert Stage 0 before the payload parse: capture the host with the PRI-anchored RFC 3164 + 5424 coalesce, decode the priority into facility / severity, and seed `xdm.observer.name`, `xdm.event.log_level`, and `xdm.alert.severity` from it as a fallback. The idiom is identical for every syslog vendor -- see [syslog-envelope.md](syslog-envelope.md). Then apply Pattern B to the payload body.
 
-## Step 4 -- Look up XDM targets via the field-anchor index
+## Step 5 -- Look up XDM targets via the field-anchor index
 
 For each distinct vendor field name, query the shipped field-anchor index:
 
@@ -69,7 +92,7 @@ Returns a ranked list of `{xdm_path, frequency, exampleVendors[]}`. Treat the fr
 
 A `0` result is NOT proof the field has no XDM home. The anchor index records what past rules happened to map; the schema is [xdm-schema.md](xdm-schema.md). Before documenting a field in the NOT MAPPED block, grep xdm-schema.md for the concept (`auth`, `mfa`, `host`, `process`, ...) and only declare no home when the schema genuinely lacks a field. Example: `mfa_method` historically returned `0` anchors, yet `xdm.auth.mfa.method` exists in the schema -- burying it in the description on the strength of the `0` was a mis-mapping.
 
-The script normalises case, whitespace, `.` and `-` punctuation. `Src.IP`, `src-ip`, `_src_ip` all resolve to `src_ip`. If a query returns nothing, try stripping suffixes or prefixes (`srcAddress` -> `src_addr`, drop a leading `client_` or `service_`, drop a trailing `_id` or `_name`).
+The script normalises case, whitespace, `.` and `-` punctuation. `Src.IP`, `src-ip`, `tmp_src_ip` all resolve to `src_ip`. If a query returns nothing, try stripping suffixes or prefixes (`srcAddress` -> `src_addr`, drop a leading `client_` or `service_`, drop a trailing `_id` or `tmp_name`).
 
 If `lookup_anchor.py` cannot be run (no Python on the host, or the bundle has been installed into a sandbox without script execution), fall back to grepping `assets/field_anchors.json` directly:
 
@@ -79,7 +102,7 @@ grep -i '"<vendor_field_name>"' assets/field_anchors.json
 
 The JSON is human-readable; each anchor block lists every synonym that has historically mapped to that XDM target along with the per-synonym count. Pick the target whose synonym-count for your input field is highest, breaking ties with the anchor's total frequency.
 
-## Step 5 -- Map source fields to XDM
+## Step 6 -- Map source fields to XDM
 
 Assign in this priority order:
 
@@ -100,7 +123,7 @@ Apply transformation patterns from [transformation-patterns.md](transformation-p
 - Authentication mandatory mapping -- when `scripts/profile_log.py` flags the sample as an authentication event (or the rule sets the `EVENT_TAG_AUTHENTICATION` tag / an `OPERATION_TYPE_AUTH_*` operation), map the full mandatory 12-field set from [authentication-mapping.md](authentication-mapping.md). The story is only created when every mandatory field is mapped; the linter raises advisory WARN-042 (warning only, exit code stays 0) for each one left unmapped.
 - Network mandatory mapping -- when the profiler flags a network / traffic event (or the rule sets the `EVENT_TAG_NETWORK` tag / a `network` event type), map the full mandatory 20-field set from [network-mapping.md](network-mapping.md), padding absent values with the type-valid placeholders. Advisory WARN-043 flags each one left unmapped. The two detections are independent: a dual event (a VPN login) takes both sets, with the union of the story tags in ONE `xdm.event.tags = arraycreate(...)`.
 
-## Step 6 -- Write the rule
+## Step 7 -- Write the rule
 
 Structure with clear stages:
 
@@ -108,7 +131,7 @@ Structure with clear stages:
 [MODEL: dataset=<vendor>_<product>_raw]
 filter <null_guard_condition>
 | alter
-    <Stage 1: extract intermediary (_temp) fields from the raw log>
+    <Stage 1: extract intermediary (tmp_temp) fields from the raw log>
 | alter
     <Stage 2 (optional): derive composite fields, banded scores, actor projections>
 | alter
@@ -120,7 +143,7 @@ Use the template at [../assets/modeling_header_template.xql](../assets/modeling_
 
 Stage discipline (parser idiom (xi)): Cortex evaluates all targets in one `alter` in parallel. A target cannot reference a sibling temp defined in the same stage -- split into multiple alter stages so later stages reference only prior-stage temps.
 
-## Step 7 -- Lint
+## Step 8 -- Lint
 
 ```sh
 python3 scripts/lint_rule.py <rule.xql>
@@ -130,7 +153,7 @@ The bundled linter covers the parser-conformance rules detectable syntactically 
 
 This replaces the mental pre-flight checklist with deterministic checking. The checklist is preserved in [modeling-rules.md](modeling-rules.md) as a manual fallback if the linter cannot run.
 
-## Step 8 -- Fix earliest-first
+## Step 9 -- Fix earliest-first
 
 INFO-012. When the linter reports multiple violations, the EARLIEST is almost always the root cause; the rest are cascade noise from the parser losing position. Fix the first defect, re-lint. Most common cascade roots (priority order):
 
@@ -140,7 +163,7 @@ INFO-012. When the linter reports multiple violations, the EARLIEST is almost al
 4. ERR-013 -- compound null-guard predicate inside `if()`
 5. ERR-014 -- bareword `true` / `false` on a string column
 
-## Step 9 -- Emit final output
+## Step 10 -- Emit final output
 
 Every rule MUST be prefixed with a MAPPED-header comment block:
 

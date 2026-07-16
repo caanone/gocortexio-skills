@@ -44,7 +44,7 @@ The user's log sample is from "VendorX", but your draft contains field names lik
 
 This is pattern-matching against exemplars in the reference markdown without checking that the field names actually exist in the user's input.
 
-Recovery: cross-check every `_temp` variable and JSON path in your draft against the user's sample. If a field is not in the sample, delete the reference. Use the exemplars in [extraction-patterns.md](extraction-patterns.md) for the shape of the extraction, not as a copy-paste source.
+Recovery: cross-check every `tmp_temp` variable and JSON path in your draft against the user's sample. If a field is not in the sample, delete the reference. Use the exemplars in [extraction-patterns.md](extraction-patterns.md) for the shape of the extraction, not as a copy-paste source.
 
 ## 4. Analysis-paragraph restatement
 

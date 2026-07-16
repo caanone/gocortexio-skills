@@ -82,12 +82,12 @@ class TestSyslogLint(unittest.TestCase):
             "[MODEL: dataset=demo_raw]\n"
             "filter\n    _raw_log != null\n"
             "| alter\n"
-            '    _host = arrayindex(regextract(_raw_log, '
+            '    tmp_host = arrayindex(regextract(_raw_log, '
             '"^.*<\\d{1,3}>[A-Za-z]{3}\\s+\\d+\\s+[\\d:]+\\s+(\\S+)\\s"), 0)\n'
             "| alter\n"
             '    xdm.observer.vendor = "Acme",\n'
             '    xdm.event.type = "ALERT",\n'
-            "    xdm.observer.name = _host\n;\n"
+            "    xdm.observer.name = tmp_host\n;\n"
         )
         ids = _ids(rule)
         self.assertNotIn("WARN-040", ids)

@@ -9,10 +9,10 @@
 filter
     _raw_log != null
 | alter
-    _id = json_extract_scalar(_raw_log, "$.id")
+    tmp_id = json_extract_scalar(_raw_log, "$.id")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.event.type = "ALERT",
-    xdm.event.id = _id,
+    xdm.event.id = tmp_id,
     xdm.event.description = _raw_log
 ;

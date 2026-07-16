@@ -9,9 +9,9 @@
 filter
     _raw_log != null
 | alter
-    _host = arrayindex(regextract(_raw_log, "[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s+CortexGrid"), 0)
+    tmp_host = arrayindex(regextract(_raw_log, "[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s+CortexGrid"), 0)
 | alter
     xdm.observer.vendor = "CortexGrid",
     xdm.event.type = "ALERT",
-    xdm.observer.name = _host
+    xdm.observer.name = tmp_host
 ;

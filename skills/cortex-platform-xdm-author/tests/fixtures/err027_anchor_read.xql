@@ -4,9 +4,9 @@
 // Fixture: a MODEL rule that reads parser-stamped underscore anchors
 // instead of deriving the values from raw columns. lint_rule.py should
 // fire ERR-027. Two shapes are exercised:
-//   _severity = coalesce(_severity, <derivation>)  -- self-reference, so
-//       the bare _severity read survives.
-//   to_number(_server_port)                        -- a bare anchor read
+//   tmp_severity = coalesce(tmp_severity, <derivation>)  -- self-reference, so
+//       the bare tmp_severity read survives.
+//   to_number(tmp_server_port)                        -- a bare anchor read
 //       that is never assigned in the rule.
 // Cortex validates a MODEL rule statically against the dataset schema,
 // where parser-only `_` columns are absent, so each read is rejected as
@@ -16,10 +16,10 @@
 filter
     _raw_log != null
 | alter
-    _client_ip = json_extract_scalar(_raw_log, "$.client_ip"),
-    _severity = coalesce(_severity, json_extract_scalar(_raw_log, "$.severity"))
+    tmp_client_ip = json_extract_scalar(_raw_log, "$.client_ip"),
+    tmp_severity = coalesce(tmp_severity, json_extract_scalar(_raw_log, "$.severity"))
 | alter
-    xdm.source.ipv4 = _client_ip,
-    xdm.alert.severity = _severity,
-    xdm.target.port = to_integer(to_number(_server_port))
+    xdm.source.ipv4 = tmp_client_ip,
+    xdm.alert.severity = tmp_severity,
+    xdm.target.port = to_integer(to_number(tmp_server_port))
 ;

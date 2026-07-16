@@ -5,7 +5,7 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _port_str = json_extract_scalar(_raw_log, "$.server_port")
+    tmp_port_str = json_extract_scalar(_raw_log, "$.server_port")
 | alter
-    xdm.target.port = to_number(_port_str)
+    xdm.target.port = to_number(tmp_port_str)
 ;

@@ -9,10 +9,10 @@
 filter
     _raw_log != null
 | alter
-    _ip = json_extract_scalar(_raw_log, "$.client_ip")
+    tmp_ip = json_extract_scalar(_raw_log, "$.client_ip")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.event.type = "ALERT",
-    xdm.source.ipv4 = _ip,
-    xdm.source.host.ipv4_addresses = _ip
+    xdm.source.ipv4 = tmp_ip,
+    xdm.source.host.ipv4_addresses = tmp_ip
 ;

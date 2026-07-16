@@ -8,9 +8,9 @@
 filter
     _raw_log != null
 | alter
-    _x = json_extract_scalar(_raw_log, "$.x")
+    tmp_x = json_extract_scalar(_raw_log, "$.x")
 | alter
     xdm.observer.vendor = "Acme",
     xdm.event.type = "ALERT",
-    xdm.alert.invented_field = _x
+    xdm.alert.invented_field = tmp_x
 ;

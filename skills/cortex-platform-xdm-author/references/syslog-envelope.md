@@ -93,16 +93,16 @@ result is byte-identical. The RFC 5424 host stays `^`-anchored because a
 filter
     _raw_log != null
 | alter
-    _pri        = to_integer(to_number(coalesce(arrayindex(regextract(_raw_log, "^.*<(\d{1,3})>[A-Za-z]{3}\s+\d+\s+[\d:]+"), 0), arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0)))),
-    _host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
-    _host_3164  = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
+    tmp_pri        = to_integer(to_number(coalesce(arrayindex(regextract(_raw_log, "^.*<(\d{1,3})>[A-Za-z]{3}\s+\d+\s+[\d:]+"), 0), arrayindex(regextract(_raw_log, "^<(\d{1,3})>"), 0)))),
+    tmp_host_5424  = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+(\S+)\s"), 0),
+    tmp_host_3164  = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+(\S+)\s"), 0)
 | alter
-    _syslog_host_raw = coalesce(_host_5424, _host_3164)
+    tmp_syslog_host_raw = coalesce(tmp_host_5424, tmp_host_3164)
 | alter
-    _syslog_host = if(_syslog_host_raw != "-", _syslog_host_raw)
+    tmp_syslog_host = if(tmp_syslog_host_raw != "-", tmp_syslog_host_raw)
 ```
 
-`_pri` takes the origin priority through the greedy 3164 capture and
+`tmp_pri` takes the origin priority through the greedy 3164 capture and
 falls back to the first `<NNN>` for RFC 5424 / PRI-only lines. The greedy
 `.*` stops at the last `<PRI>` that is followed by a timestamp, so a stray
 `<500>`-style token inside the payload never captures.
@@ -115,15 +115,15 @@ author sources the observer from a payload field instead.
 Optional envelope fields (capture only when you will map them):
 
 ```
-    _app_5424 = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+\S+\s+(\S+)\s"), 0),
-    _tag_3164 = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\S+\s+([A-Za-z0-9_\-]+)(?:\[|:)"), 0),
-    _sd_param = arrayindex(regextract(_raw_log, "\[[^\]]*\bKEYNAME=\"([^\"]+)\""), 0)
+    tmp_app_5424 = arrayindex(regextract(_raw_log, "^<\d{1,3}>\d+\s+\S+\s+\S+\s+(\S+)\s"), 0),
+    tmp_tag_3164 = arrayindex(regextract(_raw_log, "^.*<\d{1,3}>[A-Za-z]{3}\s+\d+\s+[\d:]+\s+\S+\s+([A-Za-z0-9_\-]+)(?:\[|:)"), 0),
+    tmp_sd_param = arrayindex(regextract(_raw_log, "\[[^\]]*\bKEYNAME=\"([^\"]+)\""), 0)
 ```
 
 Standard envelope assignment:
 
 ```
-    xdm.observer.name = _syslog_host
+    xdm.observer.name = tmp_syslog_host
 ```
 
 ## Priority decode -- facility and severity (function-form, ERR-012 safe)
@@ -143,9 +143,9 @@ facility first, then read it in the next stage.
 
 ```
 | alter
-    _pri_facility = to_integer(divide(_pri, 8))
+    tmp_pri_facility = to_integer(divide(tmp_pri, 8))
 | alter
-    _pri_severity = to_integer(subtract(_pri, multiply(_pri_facility, 8)))
+    tmp_pri_severity = to_integer(subtract(tmp_pri, multiply(tmp_pri_facility, 8)))
 ```
 
 Worked check: `<134>` -> `divide(134, 8) = 16.75` -> `to_integer = 16`
@@ -160,17 +160,17 @@ level, so floor the ends:
 
 ```
 | alter
-    _pri_log_level = if(
-        _pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
-        _pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
-        _pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
-        _pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
-        _pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
-    _pri_sev_band = if(
-        _pri_severity <= 2, "Critical",
-        _pri_severity = 3,  "High",
-        _pri_severity = 4,  "Medium",
-        _pri_severity != null, "Low")
+    tmp_pri_log_level = if(
+        tmp_pri_severity <= 2, XDM_CONST.LOG_LEVEL_CRITICAL,
+        tmp_pri_severity = 3,  XDM_CONST.LOG_LEVEL_ERROR,
+        tmp_pri_severity = 4,  XDM_CONST.LOG_LEVEL_WARNING,
+        tmp_pri_severity = 5,  XDM_CONST.LOG_LEVEL_NOTICE,
+        tmp_pri_severity != null, XDM_CONST.LOG_LEVEL_INFORMATIONAL),
+    tmp_pri_sev_band = if(
+        tmp_pri_severity <= 2, "Critical",
+        tmp_pri_severity = 3,  "High",
+        tmp_pri_severity = 4,  "Medium",
+        tmp_pri_severity != null, "Low")
 ```
 
 ## Use the decoded priority as a FALLBACK, never an override
@@ -181,8 +181,8 @@ populated when the payload omits severity. Always prefer the payload:
 
 ```
 | alter
-    xdm.alert.severity  = coalesce(_payload_sev_band, _pri_sev_band),
-    xdm.event.log_level = coalesce(_payload_log_level, _pri_log_level)
+    xdm.alert.severity  = coalesce(tmp_payload_sev_band, tmp_pri_sev_band),
+    xdm.event.log_level = coalesce(tmp_payload_log_level, tmp_pri_log_level)
 ```
 
 If the payload has its own severity, the priority decode is dropped by
@@ -192,7 +192,7 @@ underscore field is rejected by the linter as ERR-027.)
 
 ## When the priority is stripped
 
-A relay can forward a record with the `<NNN>` token removed. Then `_pri`
+A relay can forward a record with the `<NNN>` token removed. Then `tmp_pri`
 is null and the decode chain yields null all the way through, which the
 coalesce above handles: severity and log_level fall to whatever the
 payload provides. The Stage 0 host captures also return null, because
@@ -215,7 +215,7 @@ NOT MAPPED
 
 ## Determinism notes
 
-- Always emit `xdm.observer.name` from `_syslog_host` on a syslog source.
+- Always emit `xdm.observer.name` from `tmp_syslog_host` on a syslog source.
 - Priority decode is a coalesce fallback only; it never overrides payload severity.
 - Host capture is anchored on the priority token, never on a vendor literal.
   The linter flags a vendor-anchored header regex as WARN-040.

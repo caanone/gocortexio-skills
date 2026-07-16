@@ -5,9 +5,9 @@
 [MODEL: dataset=acme_demo_raw]
 filter _raw_log != null
 | alter
-    _participants = participants -> []
+    tmp_participants = participants -> []
 | alter
-    _passthrough = arraymap(_participants, "@element")
+    tmp_passthrough = arraymap(tmp_participants, "@element")
 | alter
-    xdm.event.description = arraystring(_passthrough, ", ")
+    xdm.event.description = arraystring(tmp_passthrough, ", ")
 ;

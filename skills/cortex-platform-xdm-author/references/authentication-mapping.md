@@ -95,7 +95,7 @@ is a reminder.
 | `xdm.event.original_event_type` | string | The raw vendor event name exactly as logged (e.g. `user.authentication.sso`, `microsoft.login.success`). |
 | `xdm.event.outcome` | string (enum) | Only `XDM_CONST.OUTCOME_SUCCESS` or `XDM_CONST.OUTCOME_FAILED`, and only on conclusive events. Do not set on intermediate steps. |
 | `xdm.auth.service` | string | The authentication service NAME, derived from the vendor auth protocol / type / mechanism field (`Kerberos`, `NTLM`, `OAuth2`, `SAML`, `SSO`, `RADIUS`, `TACACS+`, `LDAP`, ...). A free string, NOT a role: never `"SP"` / `"IDP"` (a retired misconception -- no such XDM values exist). Normalise via an if()-chain ending in a raw passthrough; pad `"Login"` when the log carries no service field. See "Deriving xdm.auth.service" below. |
-| `xdm.source.user.upn` | string | The authenticated identity, ALWAYS UPN-shaped (`jane.doe@company.com`). Cannot be empty. This is the central correlation key across IdPs -- it is `upn`, not `username`. When the raw identity may be bare, synthesise the shape: `if(_username contains "@", _username, _username != null, concat(_username, "@localhost"))`. |
+| `xdm.source.user.upn` | string | The authenticated identity, ALWAYS UPN-shaped (`jane.doe@company.com`). Cannot be empty. This is the central correlation key across IdPs -- it is `upn`, not `username`. When the raw identity may be bare, synthesise the shape: `if(tmp_username contains "@", tmp_username, tmp_username != null, concat(tmp_username, "@localhost"))`. |
 | `xdm.source.user.identity_type` | string (enum) | The nature of the authenticated principal. Derive the `XDM_CONST.IDENTITY_TYPE_*` member: `IDENTITY_TYPE_USER` for a human principal (the common case -- anytime a real UPN is present), `IDENTITY_TYPE_MACHINE` for a computer account (name ends `$`), `IDENTITY_TYPE_BUILTIN` for a well-known OS account, `IDENTITY_TYPE_VIRTUAL` for a managed / virtual account. Fall back to `IDENTITY_TYPE_UNKNOWN` only when no principal resolves. See "Deriving xdm.source.user.identity_type" below. |
 | `xdm.source.user.user_type` | string (enum) | The account class. Derive the `XDM_CONST.USER_TYPE_*` member: `USER_TYPE_REGULAR` is the default (~90% of principals), `USER_TYPE_MACHINE_ACCOUNT` when the account name ends `$`, `USER_TYPE_SERVICE_ACCOUNT` for a service-account naming convention (`svc_` / `svc-` prefix, `service` in the name, a GCP `*.iam.gserviceaccount.com` identity). ALWAYS emit the derivation (defaulting to `USER_TYPE_REGULAR`), keyed on an explicit account-type field when the log carries one, otherwise on the principal name. See "Deriving xdm.source.user.user_type" below. Distinct from `xdm.source.user.identity_type`. |
 
@@ -117,7 +117,7 @@ human-readable display name is the optional `xdm.source.user.username`
 below -- do not substitute one for the other.
 
 The upn value must ALWAYS be UPN-shaped (`user@domain`). A direct
-mapping (`xdm.source.user.upn = _upn`) is allowed ONLY when the source
+mapping (`xdm.source.user.upn = tmp_upn`) is allowed ONLY when the source
 field is a UPN by definition -- `userPrincipalName`, an email address,
 an IdP login id. For every other identity source, or whenever there is
 any doubt, use the shape-guard idiom: pass a value that already carries
@@ -125,14 +125,14 @@ any doubt, use the shape-guard idiom: pass a value that already carries
 
 ```
     xdm.source.user.upn = if(
-        _username contains "@", _username,
-        _username != null, concat(_username, "@localhost"))
+        tmp_username contains "@", tmp_username,
+        tmp_username != null, concat(tmp_username, "@localhost"))
 ```
 
 When the source is known to be bare (a TACACS principal, a Windows
 `TargetUserName`, an sshd user), the short form
-`if(_username != null, concat(_username, "@localhost"))` is equivalent.
-Never emit `xdm.source.user.upn = _username` for a possibly-bare
+`if(tmp_username != null, concat(tmp_username, "@localhost"))` is equivalent.
+Never emit `xdm.source.user.upn = tmp_username` for a possibly-bare
 identity -- the linter raises an advisory WARN-042 for a bare
 identifier whose name does not itself indicate a UPN source. The same
 shape rule applies to `xdm.target.user.upn` when a rule maps it.
@@ -153,7 +153,7 @@ name / action / sub-type) to the operation:
 
 The match is on the event's classification field, not on a field name
 alone. Prefer an `if()` chain keyed on the vendor event value, for
-example `if(_factor != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA, _event
+example `if(tmp_factor != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA, tmp_event
 contains "login", XDM_CONST.OPERATION_TYPE_AUTH_LOGIN)`. Only when the
 event kind is genuinely ambiguous does the field stay unmapped -- the
 advisory WARN-042 then reminds, which is correct.
@@ -184,20 +184,20 @@ the signals in order:
 When the log carries an explicit account-type field, key on it first --
 it is more reliable than name-shape heuristics. Otherwise derive from
 the principal name. A representative if() chain over an extracted
-`_principal` temp:
+`tmp_principal` temp:
 
 ```
     xdm.source.user.identity_type = if(
-        _principal = null, XDM_CONST.IDENTITY_TYPE_UNKNOWN,
-        _principal contains "$", XDM_CONST.IDENTITY_TYPE_MACHINE,
-        _principal contains "NT SERVICE", XDM_CONST.IDENTITY_TYPE_VIRTUAL,
-        lowercase(_principal) ~= "^(system|local service|network service|anonymous logon|root)$",
+        tmp_principal = null, XDM_CONST.IDENTITY_TYPE_UNKNOWN,
+        tmp_principal contains "$", XDM_CONST.IDENTITY_TYPE_MACHINE,
+        tmp_principal contains "NT SERVICE", XDM_CONST.IDENTITY_TYPE_VIRTUAL,
+        lowercase(tmp_principal) ~= "^(system|local service|network service|anonymous logon|root)$",
             XDM_CONST.IDENTITY_TYPE_BUILTIN,
         XDM_CONST.IDENTITY_TYPE_USER)
 ```
 
 When every principal in the source is a human login (a typical IdP or
-SaaS feed), the short form is enough: `if(_principal != null,
+SaaS feed), the short form is enough: `if(tmp_principal != null,
 XDM_CONST.IDENTITY_TYPE_USER, XDM_CONST.IDENTITY_TYPE_UNKNOWN)`.
 
 Note: `xdm.source.user.identity_type` (the nature of the account --
@@ -234,21 +234,21 @@ Name-convention fallback (real-world patterns, not invented):
 | --- | --- |
 | Name ends with `$` (AD computer account; a gMSA is treated as a computer account and also ends `$`) | `XDM_CONST.USER_TYPE_MACHINE_ACCOUNT` |
 | `svc_` / `svc-` prefix (Microsoft-recommended service-account convention, e.g. `svc_backup`, `svc-HRDataConnector`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
-| `service` anywhere in the name (`service_`, `_service`, `*service*`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
+| `service` anywhere in the name (`service_`, `tmp_service`, `*service*`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
 | GCP service account (`*.iam.gserviceaccount.com`; service agents are prefixed `service-`) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
 | Unix daemon accounts (`www-data`, `nobody`, `daemon`, and similar) | `XDM_CONST.USER_TYPE_SERVICE_ACCOUNT` |
 | Anything else (a human principal -- the default) | `XDM_CONST.USER_TYPE_REGULAR` |
 
-A representative if() chain over an extracted `_principal` temp
+A representative if() chain over an extracted `tmp_principal` temp
 (machine before service, so a gMSA `$` account is classed as a machine
 account; `~=` is a regex match, so one alternation covers the service
 conventions):
 
 ```
     xdm.source.user.user_type = if(
-        _principal = null, XDM_CONST.USER_TYPE_REGULAR,
-        _principal contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_principal) ~= "^svc[-_.]|service|gserviceaccount|^www-data$|^nobody$|^daemon$",
+        tmp_principal = null, XDM_CONST.USER_TYPE_REGULAR,
+        tmp_principal contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(tmp_principal) ~= "^svc[-_.]|service|gserviceaccount|^www-data$|^nobody$|^daemon$",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR)
 ```
@@ -287,20 +287,20 @@ When the log carries no service field at all, pad `"Login"`.
 | anything else | the raw value, unchanged (passthrough) |
 | no service field in the log | `"Login"` (generic default) |
 
-Representative idiom over an extracted `_svc` temp:
+Representative idiom over an extracted `tmp_svc` temp:
 
 ```
     xdm.auth.service = if(
-        _svc = null, "Login",
-        lowercase(_svc) contains "kerberos", "Kerberos",
-        lowercase(_svc) contains "ntlm", "NTLM",
-        lowercase(_svc) contains "oauth", "OAuth2",
-        lowercase(_svc) contains "saml", "SAML",
-        lowercase(_svc) contains "radius", "RADIUS",
-        lowercase(_svc) contains "tacacs", "TACACS+",
-        lowercase(_svc) contains "ldap", "LDAP",
-        lowercase(_svc) contains "sso", "SSO",
-        _svc)
+        tmp_svc = null, "Login",
+        lowercase(tmp_svc) contains "kerberos", "Kerberos",
+        lowercase(tmp_svc) contains "ntlm", "NTLM",
+        lowercase(tmp_svc) contains "oauth", "OAuth2",
+        lowercase(tmp_svc) contains "saml", "SAML",
+        lowercase(tmp_svc) contains "radius", "RADIUS",
+        lowercase(tmp_svc) contains "tacacs", "TACACS+",
+        lowercase(tmp_svc) contains "ldap", "LDAP",
+        lowercase(tmp_svc) contains "sso", "SSO",
+        tmp_svc)
 ```
 
 ## Worked shape (JSON source)
@@ -313,44 +313,44 @@ stage changes per format; the assignment stage does not.
 filter
     _raw_log != null
 | alter
-    _event = json_extract_scalar(_raw_log, "$.eventType"),
-    _upn = json_extract_scalar(_raw_log, "$.actor.alternateId"),
-    _src_ip = json_extract_scalar(_raw_log, "$.client.ipAddress"),
-    _src_port = json_extract_scalar(_raw_log, "$.client.port"),
-    _result = json_extract_scalar(_raw_log, "$.outcome.result"),
-    _factor = json_extract_scalar(_raw_log, "$.authenticationContext.method"),
-    _svc = json_extract_scalar(_raw_log, "$.authenticationContext.authenticationProvider")
+    tmp_event = json_extract_scalar(_raw_log, "$.eventType"),
+    tmp_upn = json_extract_scalar(_raw_log, "$.actor.alternateId"),
+    tmp_src_ip = json_extract_scalar(_raw_log, "$.client.ipAddress"),
+    tmp_src_port = json_extract_scalar(_raw_log, "$.client.port"),
+    tmp_result = json_extract_scalar(_raw_log, "$.outcome.result"),
+    tmp_factor = json_extract_scalar(_raw_log, "$.authenticationContext.method"),
+    tmp_svc = json_extract_scalar(_raw_log, "$.authenticationContext.authenticationProvider")
 | alter
-    xdm.event.type = if(_event != null, "authentication", ""),
+    xdm.event.type = if(tmp_event != null, "authentication", ""),
     xdm.event.tags = arraycreate(XDM_CONST.EVENT_TAG_AUTHENTICATION),
-    xdm.event.original_event_type = _event,
+    xdm.event.original_event_type = tmp_event,
     xdm.event.operation = if(
-        _factor != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA,
-        _event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
+        tmp_factor != null, XDM_CONST.OPERATION_TYPE_AUTH_MFA,
+        tmp_event != null, XDM_CONST.OPERATION_TYPE_AUTH_LOGIN),
     xdm.event.outcome = if(
-        _result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
-        _result != null, XDM_CONST.OUTCOME_FAILED),
+        tmp_result ~= "[Ss]uccess", XDM_CONST.OUTCOME_SUCCESS,
+        tmp_result != null, XDM_CONST.OUTCOME_FAILED),
     xdm.auth.service = if(
-        _svc = null, "Login",
-        lowercase(_svc) contains "kerberos", "Kerberos",
-        lowercase(_svc) contains "ntlm", "NTLM",
-        lowercase(_svc) contains "oauth", "OAuth2",
-        lowercase(_svc) contains "saml", "SAML",
-        lowercase(_svc) contains "ldap", "LDAP",
-        lowercase(_svc) contains "sso", "SSO",
-        _svc),
-    xdm.source.user.upn = _upn,
+        tmp_svc = null, "Login",
+        lowercase(tmp_svc) contains "kerberos", "Kerberos",
+        lowercase(tmp_svc) contains "ntlm", "NTLM",
+        lowercase(tmp_svc) contains "oauth", "OAuth2",
+        lowercase(tmp_svc) contains "saml", "SAML",
+        lowercase(tmp_svc) contains "ldap", "LDAP",
+        lowercase(tmp_svc) contains "sso", "SSO",
+        tmp_svc),
+    xdm.source.user.upn = tmp_upn,
     xdm.source.user.identity_type = if(
-        _upn != null, XDM_CONST.IDENTITY_TYPE_USER,
+        tmp_upn != null, XDM_CONST.IDENTITY_TYPE_USER,
         XDM_CONST.IDENTITY_TYPE_UNKNOWN),
     xdm.source.user.user_type = if(
-        _upn = null, XDM_CONST.USER_TYPE_REGULAR,
-        _upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
-        lowercase(_upn) ~= "^svc[-_.]|service|gserviceaccount",
+        tmp_upn = null, XDM_CONST.USER_TYPE_REGULAR,
+        tmp_upn contains "$", XDM_CONST.USER_TYPE_MACHINE_ACCOUNT,
+        lowercase(tmp_upn) ~= "^svc[-_.]|service|gserviceaccount",
             XDM_CONST.USER_TYPE_SERVICE_ACCOUNT,
         XDM_CONST.USER_TYPE_REGULAR),
-    xdm.source.ipv4 = _src_ip,
-    xdm.source.port = to_integer(to_number(_src_port)),
+    xdm.source.ipv4 = tmp_src_ip,
+    xdm.source.port = to_integer(to_number(tmp_src_port)),
     xdm.target.ipv4 = "",
     xdm.target.port = to_integer(0),
     xdm.network.ip_protocol = XDM_CONST.IP_PROTOCOL_TCP
@@ -407,7 +407,7 @@ Rules specific to this family:
   rarely `user@domain`, but `xdm.source.user.upn` is the mandatory
   correlation key, cannot be empty, and must ALWAYS be UPN-shaped --
   synthesise the shape with
-  `if(_user contains "@", _user, _user != null, concat(_user, "@localhost"))`
+  `if(tmp_user contains "@", tmp_user, tmp_user != null, concat(tmp_user, "@localhost"))`
   and carry the raw principal in `xdm.source.user.username`.
 - PERMIT / DENY is the AUTHENTICATION outcome, not a network action.
   Do not tag `XDM_CONST.EVENT_TAG_NETWORK` unless the record carries a
@@ -420,7 +420,7 @@ Rules specific to this family:
   `task_id` -> `xdm.network.session_id` and `elapsed_time` ->
   `xdm.event.duration`. `elapsed_time` is SECONDS and
   `xdm.event.duration` is MILLISECONDS, so multiply by 1000 in function
-  form: `to_integer(multiply(to_number(_elapsed), 1000))` (never infix
+  form: `to_integer(multiply(to_number(tmp_elapsed), 1000))` (never infix
   `* 1000`). On the authentication shapes, the operation is
   `OPERATION_TYPE_AUTH_LOGIN` and the auth method is `"password"`.
 - Command accounting is a COMMAND EXECUTION, not an authentication

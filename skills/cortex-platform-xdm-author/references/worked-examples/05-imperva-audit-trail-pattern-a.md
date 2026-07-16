@@ -103,10 +103,10 @@ Note `email`'s top candidate is `xdm.source.user.upn`, not `xdm.source.user.user
 
 The Imperva parser stamps two anchors that a MODEL rule must NOT read (Cortex rejects a parser-only `_` column as an unknown field, ERR-027):
 
-- `_action_class` -- the first underscore-separated token of `event_action`. Closed vocabulary: `SITE`, `USER`, `SSL`, `POLICY`, `LOGIN`, `ACCOUNT`, `SYSTEM`. Drives every per-class triage filter ("show me all SSL ops" -> `| filter _action_class = "SSL"`).
-- `_resource_type` -- the resource taxonomy class (Site, User, Policy, SSL, Account, Rule, System). Pulled from the JSON.
+- `tmp_action_class` -- the first underscore-separated token of `event_action`. Closed vocabulary: `SITE`, `USER`, `SSL`, `POLICY`, `LOGIN`, `ACCOUNT`, `SYSTEM`. Drives every per-class triage filter ("show me all SSL ops" -> `| filter tmp_action_class = "SSL"`).
+- `tmp_resource_type` -- the resource taxonomy class (Site, User, Policy, SSL, Account, Rule, System). Pulled from the JSON.
 
-The MODEL rule derives both on its own: `_resource_type` from the JSON path, and `_action_class` from the `event_action` prefix. It does not read the parser-stamped anchor of the same name -- Cortex validates a MODEL rule statically against the dataset schema, where parser-only `_` columns do not exist, so the read is rejected before any `coalesce()` fallback can run (ERR-027).
+The MODEL rule derives both on its own: `tmp_resource_type` from the JSON path, and `tmp_action_class` from the `event_action` prefix. It does not read the parser-stamped anchor of the same name -- Cortex validates a MODEL rule statically against the dataset schema, where parser-only `_` columns do not exist, so the read is rejected before any `coalesce()` fallback can run (ERR-027).
 
 ## The full rule
 
@@ -126,41 +126,41 @@ The MODEL rule derives both on its own: `_resource_type` from the JSON path, and
 
 // -- Stage 1: Extract all fields from parsed columns ------------------------
 alter
-    _event_action = json_extract_scalar(to_string(imperva), "$.audit_trail.event_action"),
-    _event_action_description = json_extract_scalar(to_string(imperva), "$.audit_trail.event_action_description"),
-    _assumed_by = json_extract_scalar(to_string(imperva), "$.audit_trail.assumed_by"),
-    // `_resource_type` is derived in full from the JSON path here. It is
-    // NOT lifted from a parser-stamped `_resource_type` anchor: Cortex
+    tmp_event_action = json_extract_scalar(to_string(imperva), "$.audit_trail.event_action"),
+    tmp_event_action_description = json_extract_scalar(to_string(imperva), "$.audit_trail.event_action_description"),
+    tmp_assumed_by = json_extract_scalar(to_string(imperva), "$.audit_trail.assumed_by"),
+    // `tmp_resource_type` is derived in full from the JSON path here. It is
+    // NOT lifted from a parser-stamped `tmp_resource_type` anchor: Cortex
     // validates MODEL rules statically against the dataset schema, where
     // parser-only `_` columns are absent, so reading one is rejected as an
     // unknown field before any coalesce() fallback runs (ERR-027).
     // Vocabulary: ~8 closed values (Site, User, Policy, SSL, Account,
     // Rule, System) plus NULL on system-initiated rows.
-    _resource_type = json_extract_scalar(to_string(imperva), "$.audit_trail.resource_type"),
-    _resource_id = json_extract_scalar(to_string(imperva), "$.audit_trail.resource_id"),
-    _resource_name = json_extract_scalar(to_string(imperva), "$.audit_trail.resource_name"),
-    _event_context = json_extract_scalar(to_string(imperva), "$.audit_trail.event_context"),
-    _event_context_description = json_extract_scalar(to_string(imperva), "$.audit_trail.event_context_description"),
-    _account_id = json_extract_scalar(to_string(imperva), "$.ids.account_id"),
-    _account_name = json_extract_scalar(to_string(imperva), "$.ids.account_name"),
-    _site_id = json_extract_scalar(to_string(imperva), "$.ids.site_id"),
-    _user_email = json_extract_scalar(to_string(user), "$.email")
+    tmp_resource_type = json_extract_scalar(to_string(imperva), "$.audit_trail.resource_type"),
+    tmp_resource_id = json_extract_scalar(to_string(imperva), "$.audit_trail.resource_id"),
+    tmp_resource_name = json_extract_scalar(to_string(imperva), "$.audit_trail.resource_name"),
+    tmp_event_context = json_extract_scalar(to_string(imperva), "$.audit_trail.event_context"),
+    tmp_event_context_description = json_extract_scalar(to_string(imperva), "$.audit_trail.event_context_description"),
+    tmp_account_id = json_extract_scalar(to_string(imperva), "$.ids.account_id"),
+    tmp_account_name = json_extract_scalar(to_string(imperva), "$.ids.account_name"),
+    tmp_site_id = json_extract_scalar(to_string(imperva), "$.ids.site_id"),
+    tmp_user_email = json_extract_scalar(to_string(user), "$.email")
 
-// -- Stage 2: Derive `_action_class` from event_action (prefix) -------------
-// `_action_class` is derived in full from `_event_action`. It is NOT lifted
-// from a parser-stamped `_action_class` anchor (ERR-027).
+// -- Stage 2: Derive `tmp_action_class` from event_action (prefix) -------------
+// `tmp_action_class` is derived in full from `tmp_event_action`. It is NOT lifted
+// from a parser-stamped `tmp_action_class` anchor (ERR-027).
 | alter
-    _action_class = if(_event_action != null, arrayindex(split(_event_action, "_"), 0))
+    tmp_action_class = if(tmp_event_action != null, arrayindex(split(tmp_event_action, "_"), 0))
 
 // -- Stage 3: Build description summary string ------------------------------
 | alter
-    _description = concat(
-        coalesce(_event_action_description, _event_action, "Unknown action"),
-        if(_action_class != null, concat(" | Class: ", _action_class), ""),
-        " | Context: ", coalesce(_event_context_description, _event_context, "unknown"),
-        if(_assumed_by != null, concat(" | Assumed by: ", _assumed_by), ""),
-        " | Account: ", coalesce(_account_name, _account_id, "unknown"),
-        if(_site_id != null, concat(" | Site ID: ", _site_id), ""))
+    tmp_description = concat(
+        coalesce(tmp_event_action_description, tmp_event_action, "Unknown action"),
+        if(tmp_action_class != null, concat(" | Class: ", tmp_action_class), ""),
+        " | Context: ", coalesce(tmp_event_context_description, tmp_event_context, "unknown"),
+        if(tmp_assumed_by != null, concat(" | Assumed by: ", tmp_assumed_by), ""),
+        " | Account: ", coalesce(tmp_account_name, tmp_account_id, "unknown"),
+        if(tmp_site_id != null, concat(" | Site ID: ", tmp_site_id), ""))
 
 // -- Stage 4: Map to XDM fields --------------------------------------------
 | alter
@@ -170,33 +170,33 @@ alter
 
     // XDM Event fields -- xdm.event.*
     xdm.event.type = "AUDIT",
-    xdm.event.description = _description,
-    xdm.event.original_event_type = _event_action,
-    xdm.event.operation_sub_type = _event_action,
+    xdm.event.description = tmp_description,
+    xdm.event.original_event_type = tmp_event_action,
+    xdm.event.operation_sub_type = tmp_event_action,
     xdm.event.operation = if(
-        _event_action contains "LOGIN" or _event_action contains "SIGN_IN" or _event_action contains "LOGGED_IN" or _event_action contains "LOGGED_OUT", XDM_CONST.OPERATION_TYPE_AUTH_LOGIN,
-        _event_action contains "TWO_FACTOR" or _event_action contains "AUTHENTICAT", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
-        _event_action contains "CREAT" or _event_action contains "_ADD" or _event_action contains "SIGNUP" or _event_action contains "UPLOAD", XDM_CONST.OPERATION_TYPE_CREATE,
-        _event_action contains "REMOV" or _event_action contains "DELET" or _event_action contains "PURG", XDM_CONST.OPERATION_TYPE_DELETE,
-        _event_action contains "UPDAT" or _event_action contains "CHANG" or _event_action contains "EDIT" or _event_action contains "RESET", XDM_CONST.OPERATION_TYPE_UPDATE,
-        _event_action contains "CONFIG" or _event_action contains "SETTING", XDM_CONST.OPERATION_TYPE_CONFIG_CHANGE,
-        _event_action contains "ENABL" or _event_action contains "DISABL" or _event_action contains "LOCK" or _event_action contains "ACTIV", XDM_CONST.OPERATION_TYPE_STATUS_CHANGE,
+        tmp_event_action contains "LOGIN" or tmp_event_action contains "SIGN_IN" or tmp_event_action contains "LOGGED_IN" or tmp_event_action contains "LOGGED_OUT", XDM_CONST.OPERATION_TYPE_AUTH_LOGIN,
+        tmp_event_action contains "TWO_FACTOR" or tmp_event_action contains "AUTHENTICAT", XDM_CONST.OPERATION_TYPE_AUTH_MFA,
+        tmp_event_action contains "CREAT" or tmp_event_action contains "_ADD" or tmp_event_action contains "SIGNUP" or tmp_event_action contains "UPLOAD", XDM_CONST.OPERATION_TYPE_CREATE,
+        tmp_event_action contains "REMOV" or tmp_event_action contains "DELET" or tmp_event_action contains "PURG", XDM_CONST.OPERATION_TYPE_DELETE,
+        tmp_event_action contains "UPDAT" or tmp_event_action contains "CHANG" or tmp_event_action contains "EDIT" or tmp_event_action contains "RESET", XDM_CONST.OPERATION_TYPE_UPDATE,
+        tmp_event_action contains "CONFIG" or tmp_event_action contains "SETTING", XDM_CONST.OPERATION_TYPE_CONFIG_CHANGE,
+        tmp_event_action contains "ENABL" or tmp_event_action contains "DISABL" or tmp_event_action contains "LOCK" or tmp_event_action contains "ACTIV", XDM_CONST.OPERATION_TYPE_STATUS_CHANGE,
         XDM_CONST.OPERATION_TYPE_AUDIT),
 
     // XDM Source fields -- xdm.source.* (who performed the action)
-    xdm.source.user.username = _user_email,
+    xdm.source.user.username = tmp_user_email,
 
     // XDM Target Resource fields -- xdm.target.resource.* (what was acted upon)
-    xdm.target.resource.type = _resource_type,
-    xdm.target.resource.name = _resource_name,
-    xdm.target.resource.id = _resource_id,
-    xdm.target.resource.parent_id = _account_id,
+    xdm.target.resource.type = tmp_resource_type,
+    xdm.target.resource.name = tmp_resource_name,
+    xdm.target.resource.id = tmp_resource_id,
+    xdm.target.resource.parent_id = tmp_account_id,
 
     // XDM Target Host -- resource_name is an FQDN when resource_type is "Site"
-    xdm.target.host.hostname = if(_resource_type = "Site", _resource_name),
+    xdm.target.host.hostname = if(tmp_resource_type = "Site", tmp_resource_name),
 
     // XDM Target User -- mirrored from source (only one user in payload)
-    xdm.target.user.username = _user_email;
+    xdm.target.user.username = tmp_user_email;
 ```
 
 ## Key decisions called out
@@ -204,7 +204,7 @@ alter
 - `to_string(<column>)` wrap is mandatory. Every read goes through `json_extract_scalar(to_string(imperva), ...)` not `json_extract_scalar(imperva, ...)`. The column's declared XSIAM type may not be `string` (it can be a boxed JSON), and `json_extract_scalar` requires a string first argument. Omitting the cast surfaces as a generic parser error with no useful pointer -- see [parser-idioms.md](../parser-idioms.md) ERR-018 for the related cast doctrine on arrays.
 - `xdm.event.operation` classifier on the verb suffix. Instead of a 60-entry switch over every `event_action` code, the rule pattern-matches on substring tokens (`LOGIN`, `CREAT`, `REMOV`, etc.) to land each verb in the right `OPERATION_TYPE_*` constant. Closes the long-tail case where Imperva adds a new verb code: as long as it contains a known token like `CREATE`, it routes to `OPERATION_TYPE_CREATE`. Otherwise falls through to `OPERATION_TYPE_AUDIT`.
 - `xdm.event.type = "AUDIT"` (normalised category). All Imperva audit-trail events are administrative; the normalised category is `AUDIT`. Per workflow step 5 in [workflow.md](../workflow.md), `xdm.event.type` MUST be one of the documented normalised categories -- not the raw vendor event name.
-- One user, mirrored. The Imperva payload includes only one user (the admin who performed the action). That user is both source (the actor) and target (since admin actions on user resources implicate themselves). One-sided actor mirroring per [transformation-patterns.md](../transformation-patterns.md): map the same `_user_email` to both `xdm.source.user.username` and `xdm.target.user.username`.
-- `xdm.target.host.hostname` only when resource is a Site. `_resource_name` is generic -- it's a site FQDN when `_resource_type = "Site"`, a user email when type is `User`, a policy name when type is `Policy`, etc. The conditional assignment routes the FQDN to its semantic XDM home only when the type discriminator confirms.
-- `xdm.target.resource.parent_id = _account_id`. Imperva resources live under an account; the account ID is the resource's organisational parent. Maps to the explicit `parent_id` field rather than overloading another path.
-- Anchor symmetry. `_resource_type` and `_action_class` use identical `coalesce(<anchor>, <fallback>)` shapes. The MODEL rule does NOT depend on the parser being present -- it derives both values fresh from the JSON when the anchor column is null, so historical rows ingested before the parser shipped continue to model correctly.
+- One user, mirrored. The Imperva payload includes only one user (the admin who performed the action). That user is both source (the actor) and target (since admin actions on user resources implicate themselves). One-sided actor mirroring per [transformation-patterns.md](../transformation-patterns.md): map the same `tmp_user_email` to both `xdm.source.user.username` and `xdm.target.user.username`.
+- `xdm.target.host.hostname` only when resource is a Site. `tmp_resource_name` is generic -- it's a site FQDN when `tmp_resource_type = "Site"`, a user email when type is `User`, a policy name when type is `Policy`, etc. The conditional assignment routes the FQDN to its semantic XDM home only when the type discriminator confirms.
+- `xdm.target.resource.parent_id = tmp_account_id`. Imperva resources live under an account; the account ID is the resource's organisational parent. Maps to the explicit `parent_id` field rather than overloading another path.
+- Anchor symmetry. `tmp_resource_type` and `tmp_action_class` use identical `coalesce(<anchor>, <fallback>)` shapes. The MODEL rule does NOT depend on the parser being present -- it derives both values fresh from the JSON when the anchor column is null, so historical rows ingested before the parser shipped continue to model correctly.
