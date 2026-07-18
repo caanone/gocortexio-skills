@@ -21441,8 +21441,12 @@
       ]
     },
     "xdm.source.process.integrity_level": {
-      "frequency": 1,
+      "frequency": 2,
       "synonyms": [
+        {
+          "synonym": "integritylevel",
+          "count": 1
+        },
         {
           "synonym": "initiatingprocessintegritylevel",
           "count": 1
@@ -21453,6 +21457,7 @@
         }
       ],
       "synonyms_simple": [
+        "integritylevel",
         "initiatingprocessintegritylevel",
         "properties"
       ],

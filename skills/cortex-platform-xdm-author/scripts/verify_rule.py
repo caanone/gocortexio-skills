@@ -564,8 +564,18 @@ def _split_assignments(body: str) -> List[str]:
     in_str = None
     for i, ch in enumerate(body):
         if in_str:
-            if ch == in_str and body[i - 1] != "\\":
-                in_str = None
+            if ch == in_str:
+                # The quote closes the string only if it is not escaped. A
+                # run of backslashes before it escapes the quote only when the
+                # run length is ODD; an even run (e.g. a regex ending in
+                # `\\\\"`, two literal backslashes) leaves the quote bare.
+                bs = 0
+                j = i - 1
+                while j >= start and body[j] == "\\":
+                    bs += 1
+                    j -= 1
+                if bs % 2 == 0:
+                    in_str = None
             continue
         if ch in ('"', "'"):
             in_str = ch

@@ -101,6 +101,7 @@ class TestSyntacticRules(unittest.TestCase):
         ("err017_arraymap_passthrough.xql", "ERR-017"),
         ("err018_missing_cast.xql", "ERR-018"),
         ("err019_unused_temp.xql", "ERR-019"),
+        ("err019_unused_temp_raw.xql", "ERR-019"),
         ("err020_invented_target.xql", "ERR-020"),
         ("err024_sibling_reference.xql", "ERR-024"),
         ("err025_concat_hidden.xql", "ERR-025"),
@@ -115,6 +116,7 @@ class TestSyntacticRules(unittest.TestCase):
         ("warn041_pri_no_severity.xql", "WARN-041"),
         ("warn042_auth_mandatory.xql", "WARN-042"),
         ("warn043_network_mandatory.xql", "WARN-043"),
+        ("warn049_hardcoded_path.xql", "WARN-049"),
         ("info013_overmapping.xql", "INFO-013"),
     ]
 
@@ -567,7 +569,9 @@ class TestGcRawGating(unittest.TestCase):
     def _ids(self, source: str) -> list:
         return [v["rule_id"] for v in lint(source)]
 
-    def test_err019_silent_on_plain_raw(self):
+    def test_err019_fires_on_plain_raw(self):
+        # Cortex rejects an unused field on EVERY dataset, so ERR-019 is no
+        # longer scoped to _gc_raw: tmp_dead is extracted but never used.
         source = (
             "[MODEL: dataset=demo_raw]\n"
             "alter\n"
@@ -577,8 +581,24 @@ class TestGcRawGating(unittest.TestCase):
             "    xdm.event.id = tmp_used\n"
             ";\n"
         )
-        ids = self._ids(source)
-        self.assertNotIn("ERR-019", ids)
+        self.assertIn("ERR-019", self._ids(source))
+
+    def test_err019_silent_when_temp_feeds_a_chain(self):
+        # A temp consumed through coalesce()/another temp is USED and must
+        # not be flagged (guards the false positive the old reach analysis
+        # produced on multi-line if() chains).
+        source = (
+            "[MODEL: dataset=demo_raw]\n"
+            "alter\n"
+            '    tmp_a = json_extract_scalar(_raw_log, "$.a"),\n'
+            '    tmp_b = json_extract_scalar(_raw_log, "$.b")\n'
+            "| alter\n"
+            "    tmp_user = coalesce(tmp_a, tmp_b)\n"
+            "| alter\n"
+            "    xdm.source.user.username = tmp_user\n"
+            ";\n"
+        )
+        self.assertNotIn("ERR-019", self._ids(source))
 
     def test_err019_fires_on_gc_raw(self):
         source = (
@@ -1315,6 +1335,158 @@ class TestErr028ReservedUnderscore(unittest.TestCase):
         ids = self._ids(rule)
         self.assertIn("WARN-018", ids)
         self.assertNotIn("ERR-028", ids)
+
+
+class TestWarn048IncompleteHttpMap(unittest.TestCase):
+    """WARN-048 flags an xdm.network.http.response_code if()-chain that maps
+    fewer status codes than the authoritative crosswalk, and stays silent on
+    the complete chain and on a single-const assignment."""
+
+    def _ids(self, source: str) -> list:
+        return [v["rule_id"] for v in lint(source)]
+
+    _HEAD = (
+        "[MODEL: dataset=web_raw]\nfilter\n    _raw_log != null\n| alter\n"
+        "    tmp_status = to_integer(to_number(_raw_log))\n| alter\n"
+    )
+
+    def _complete_chain(self) -> str:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "http_status_map", bundle_root() / "scripts" / "http_status_map.py")
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+        return mod.render("tmp_status")
+
+    def test_partial_multiline_chain_flagged(self):
+        rule = (
+            self._HEAD
+            + "    xdm.network.http.response_code = if(\n"
+            "        tmp_status = 200, XDM_CONST.HTTP_RSP_CODE_OK,\n"
+            "        tmp_status = 404, XDM_CONST.HTTP_RSP_CODE_NOT_FOUND,\n"
+            "        tmp_status = 500, "
+            "XDM_CONST.HTTP_RSP_CODE_INTERNAL_SERVER_ERROR)\n;\n"
+        )
+        self.assertIn("WARN-048", self._ids(rule))
+
+    def test_partial_single_line_chain_flagged(self):
+        rule = (
+            self._HEAD
+            + "    xdm.network.http.response_code = if(tmp_status = 200, "
+            "XDM_CONST.HTTP_RSP_CODE_OK, null)\n;\n"
+        )
+        self.assertIn("WARN-048", self._ids(rule))
+
+    def test_complete_chain_not_flagged(self):
+        rule = self._HEAD + "    " + self._complete_chain() + "\n;\n"
+        self.assertNotIn("WARN-048", self._ids(rule))
+
+    def test_single_const_not_flagged(self):
+        # A fixed-response source mapping to one constant is not a partial
+        # chain over status codes.
+        rule = (
+            "[MODEL: dataset=web_raw]\nfilter\n    _raw_log != null\n| alter\n"
+            "    xdm.network.http.response_code = XDM_CONST.HTTP_RSP_CODE_OK\n;\n"
+        )
+        self.assertNotIn("WARN-048", self._ids(rule))
+
+
+class TestWarn050EndpointNoOperation(unittest.TestCase):
+    """WARN-050 flags an endpoint event (a process / file / registry entity is
+    mapped) that never assigns xdm.event.operation, and stays silent when the
+    operation verb is present or when the rule is not an endpoint event."""
+
+    def _ids(self, source: str) -> list:
+        return [v["rule_id"] for v in lint(source)]
+
+    _HEAD = "[MODEL: dataset=win_raw]\nfilter\n    _raw_log != null\n| alter\n"
+
+    def test_process_without_operation_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_img = json_extract_scalar(_raw_log, "$.Image")\n'
+            "| alter\n"
+            "    xdm.source.process.executable.path = tmp_img\n;\n"
+        )
+        self.assertIn("WARN-050", self._ids(rule))
+
+    def test_registry_without_operation_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_k = json_extract_scalar(_raw_log, "$.TargetObject")\n'
+            "| alter\n"
+            "    xdm.target.registry.key = tmp_k\n;\n"
+        )
+        self.assertIn("WARN-050", self._ids(rule))
+
+    def test_process_with_operation_not_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_img = json_extract_scalar(_raw_log, "$.Image")\n'
+            "| alter\n"
+            "    xdm.source.process.executable.path = tmp_img,\n"
+            "    xdm.event.operation = XDM_CONST.OPERATION_TYPE_PROCESS_CREATE\n;\n"
+        )
+        self.assertNotIn("WARN-050", self._ids(rule))
+
+    def test_non_endpoint_rule_not_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_ip = json_extract_scalar(_raw_log, "$.src")\n'
+            "| alter\n"
+            "    xdm.source.ipv4 = tmp_ip\n;\n"
+        )
+        self.assertNotIn("WARN-050", self._ids(rule))
+
+
+class TestWarn049HardcodedLiteral(unittest.TestCase):
+    """WARN-049 flags a hardcoded sample-derived literal (path / host / IP /
+    ID) baked into a contains / = branch, and stays silent on standard
+    tokens, identity strings and XDM_CONST values."""
+
+    def _ids(self, source: str) -> list:
+        return [v["rule_id"] for v in lint(source)]
+
+    _HEAD = "[MODEL: dataset=x_raw]\nfilter\n    _raw_log != null\n| alter\n"
+
+    def test_path_literal_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_t = if(requestUri contains "/keys/", "appkey")\n'
+            "| alter\n    xdm.alert.subcategory = tmp_t\n;\n"
+        )
+        self.assertIn("WARN-049", self._ids(rule))
+
+    def test_ip_literal_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_g = if(tmp_h = "10.0.0.5", "gw", tmp_h)\n'
+            "| alter\n    xdm.source.host.hostname = tmp_g\n;\n"
+        )
+        self.assertIn("WARN-049", self._ids(rule))
+
+    def test_standard_token_not_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_svc = if(lowercase(tmp_raw) contains "kerberos", '
+            '"Kerberos", tmp_raw)\n'
+            "| alter\n    xdm.auth.service = tmp_svc\n;\n"
+        )
+        self.assertNotIn("WARN-049", self._ids(rule))
+
+    def test_identity_and_const_not_flagged(self):
+        rule = (
+            self._HEAD
+            + '    tmp_o = if(tmp_r contains "PERMIT", '
+            "XDM_CONST.OUTCOME_SUCCESS, XDM_CONST.OUTCOME_FAILED)\n"
+            "| alter\n"
+            '    xdm.observer.vendor = "Cisco",\n'
+            '    xdm.observer.product = "SecureX",\n'
+            '    xdm.event.type = "authentication",\n'
+            "    xdm.event.outcome = tmp_o\n;\n"
+        )
+        self.assertNotIn("WARN-049", self._ids(rule))
 
 
 class TestWarn047PrependFragile(unittest.TestCase):

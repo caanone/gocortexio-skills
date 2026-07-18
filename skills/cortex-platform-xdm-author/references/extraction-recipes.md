@@ -309,7 +309,10 @@ Yields, for `10.0.0.5 - alice [30/Jun/2025:12:00:04 +0000] "GET /app/login HTTP/
 `xdm.network.http.url = "/app/login"`,
 `xdm.source.user_agent = "Mozilla/5.0 (Windows NT 10.0)"`. The status
 (`HTTP/\d\.\d" (\d{3})`) bands to `xdm.event.outcome` (2xx/3xx ->
-SUCCESS, 4xx/5xx -> FAILED) and `xdm.network.http.response_code`; the
+SUCCESS, 4xx/5xx -> FAILED) and, cast to an integer, maps to
+`xdm.network.http.response_code` via the COMPLETE crosswalk chain
+(`python3 scripts/http_status_map.py --render` -- all 60 codes, never a
+hand-listed subset; the linter flags a partial map as WARN-048); the
 byte count after it maps to `xdm.target.sent_bytes`; the `%u` field (3rd
 token, `-` when absent) is the authenticated user when present.
 

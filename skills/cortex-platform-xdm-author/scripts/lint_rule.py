@@ -58,17 +58,25 @@ Schema-aware checks (XDM schema + XDM_CONST loaded from references):
     WARN-047 Prepend-fragile syslog extraction: a body field captured with
              a ^-anchored / positional regex instead of a payload token, so
              it misses the direct or relay-prepended arrival form (advisory).
+    WARN-048 Incomplete HTTP response-code mapping: xdm.network.http.
+             response_code assigned via an if()-chain that covers fewer status
+             codes than the authoritative crosswalk (advisory).
+    WARN-049 Hardcoded sample-derived customer literal (path / host / IP /
+             ID) baked into a contains / = branch (advisory).
+    WARN-050 Endpoint event (process / file / registry / module entity mapped)
+             with no xdm.event.operation verb assigned (advisory).
     INFO-013 Advisory: one underscore temp mapped across 3+ XDM entity
              families (likely over-mapping; event / observer excluded).
 
 Dataflow checks (reach + array-typing over the rule's temps):
 
-    ERR-019  Underscore temp never reaches an xdm.* assignment (_gc_raw).
+    ERR-019  tmp_ temp never reaches an xdm.* assignment (all datasets).
     ERR-025  Temp whose only consumer is inside a concat() / arraystring() body (_gc_raw).
 
-ERR-019 and ERR-025 are a hard block only on _gc_raw datasets; on plain
-_raw datasets Cortex tolerates the same shapes, so the linter scopes
-them to _gc_raw.
+ERR-019 is a hard block on EVERY dataset -- Cortex rejects an unused field
+("Datamodel contains unused fields") regardless of the dataset suffix.
+ERR-025 (the concat-hidden shape) stays scoped to _gc_raw, where Cortex is
+strict about it; on plain _raw datasets that shape is tolerated.
 
 INFO-006 (fields - cleanup) is deliberately NOT emitted: underscore
 temps are dropped by the dataset model layer at query time, so an
@@ -98,6 +106,7 @@ from typing import Iterable, List, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _xdm_schema import (  # noqa: E402
+    load_xdm_consts,
     load_xdm_paths,
     xdm_path_exists,
     xdm_path_is_array,
@@ -1074,27 +1083,50 @@ def _is_gc_raw(code_lines: List[str]) -> bool:
 
 
 def _check_err019(code_lines: List[str], df: dict) -> List[dict]:
-    if not _is_model(code_lines) or not _is_gc_raw(code_lines):
+    """A tmp_ temp that is defined but never READ anywhere in the rule --
+    not on another temp's RHS, not in an if() / filter condition, not in
+    an xdm.* assignment. Cortex rejects it on EVERY dataset ('Datamodel
+    contains unused fields'), so this is a hard error on all MODEL rules.
+
+    Sound by construction: if the temp's name appears anywhere except as
+    its own assignment LHS it is treated as used, so a legitimate temp
+    consumed through a coalesce() / if() chain is never flagged. (The older
+    transitive-reach analysis mis-parsed multi-line if() conditions such as
+    ``tmp_x = null`` as definitions, which produced false positives; this
+    name-appearance check does not depend on paren-depth tracking.)"""
+    if not _is_model(code_lines):
         return []
+    # Count every tmp_ token across the rule (comments + string bodies
+    # stripped). A temp that is USED -- on another RHS, in an if() /
+    # filter condition (`tmp_x = "PERMIT"`), or in an xdm.* assignment --
+    # appears at least twice: its definition plus the use. A temp that is
+    # never referenced again appears exactly once. Counting is immune to
+    # the def-vs-condition ambiguity (both `tmp_x = expr` forms count the
+    # token) and to paren-depth / escaped-quote parsing pitfalls.
+    counts: dict = {}
+    defline: dict = {}   # tmp_name -> first definition line (1-indexed)
+    for i, raw in enumerate(code_lines):
+        cp = _strip_strings(_strip_line_comment(raw))
+        for name in _TEMP_TOKEN.findall(cp):
+            counts[name] = counts.get(name, 0) + 1
+        m = _TEMP_LHS.match(cp)
+        if m:
+            defline.setdefault(m.group(1), i + 1)
     out: List[dict] = []
-    seen: set = set()
-    for d in df["defs"]:
-        if not d["is_temp"] or d["name"] in seen:
-            continue
-        seen.add(d["name"])
-        if d["name"] in df["reachable"]:
+    for name, line in sorted(defline.items(), key=lambda kv: kv[1]):
+        if counts.get(name, 0) > 1:
             continue
         out.append(
             _violation(
                 "ERR-019",
                 "error",
-                d["line"],
-                f"Underscore variable '{d['name']}' is defined but never "
-                "reaches any xdm.* assignment, even through other "
-                "_-prefixed intermediaries. Cortex rejects this on "
-                "_gc_raw datasets as 'unused field'.",
-                f"Map the tail of the chain from '{d['name']}' to an xdm.* "
-                "field, or remove the dead intermediary chain.",
+                line,
+                f"Temp '{name}' is defined but never used -- it does not "
+                "reach any xdm.* assignment or feed any other temp. Cortex "
+                "rejects an unused field on every dataset ('Datamodel "
+                "contains unused fields').",
+                f"Map '{name}' to an xdm.* field (directly or through a "
+                "temp that reaches one), or remove the extraction.",
             )
         )
     return out
@@ -1978,6 +2010,209 @@ def _check_warn047(code_lines: List[str]) -> List[dict]:
                 )
             )
     return out
+
+
+# ----- WARN-048  incomplete HTTP response-code mapping
+
+
+_HTTP_RC_LHS_RE = re.compile(r"^\s*xdm\.network\.http\.response_code\s*=(?!=)")
+_HTTP_RC_CONST_RE = re.compile(r"XDM_CONST\.HTTP_RSP_CODE_[A-Z0-9_]+")
+_IF_OPEN_RE = re.compile(r"\bif\s*\(")
+
+
+def _http_rsp_code_full_set() -> set:
+    """The complete HTTP_RSP_CODE const set the linter knows. Backed by
+    assets/http_status_crosswalk.json (merged in _xdm_schema); empty only if
+    the asset is missing, in which case WARN-048 stays silent."""
+    return set(load_xdm_consts().get("HTTP_RSP_CODE", set()))
+
+
+def _paren_delta(text: str) -> int:
+    """Net '(' minus ')' in text, ignoring parens inside string literals."""
+    stripped = _strip_strings(text)
+    return stripped.count("(") - stripped.count(")")
+
+
+def _check_warn048(code_lines: List[str]) -> List[dict]:
+    """xdm.network.http.response_code is const-typed over the full HTTP status
+    set. When a rule maps it with a hand-written if()-chain that covers fewer
+    codes than the authoritative crosswalk, every code the build sample did
+    not contain is silently dropped -- yet a production source can return any
+    of them. Advisory: render the complete chain with http_status_map.py."""
+    if not _is_model(code_lines):
+        return []
+    full = _http_rsp_code_full_set()
+    if not full:
+        return []
+    out: List[dict] = []
+    n = len(code_lines)
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        if not _HTTP_RC_LHS_RE.match(cp):
+            continue
+        # Gather the RHS span by paren depth: the if()-chain's branch lines
+        # start with `tmp_status =`, so a line-shape boundary scan would
+        # truncate at the first branch. Consume lines until the if() closes.
+        rhs_first = cp.split("=", 1)[1]
+        parts = [rhs_first]
+        depth = _paren_delta(rhs_first)
+        j = i + 1
+        while depth > 0 and j < n:
+            nxt = _strip_line_comment(code_lines[j])
+            parts.append(nxt)
+            depth += _paren_delta(nxt)
+            j += 1
+        rhs = "\n".join(parts)
+        # Only a conditional chain over status codes is in scope; a single
+        # constant assignment or a coalesce / lookup is left alone.
+        if not _IF_OPEN_RE.search(rhs):
+            continue
+        covered = {m for m in _HTTP_RC_CONST_RE.findall(rhs) if m in full}
+        if not covered or len(covered) >= len(full):
+            continue
+        out.append(
+            _violation(
+                "WARN-048",
+                "warning",
+                i + 1,
+                f"xdm.network.http.response_code is mapped with an if()-chain "
+                f"covering {len(covered)} of {len(full)} HTTP status codes. "
+                "The field is const-typed over the full status set, so any "
+                "code the build sample did not contain is silently dropped in "
+                "production.",
+                "Render the COMPLETE chain with "
+                "'python3 scripts/http_status_map.py --render' (optionally "
+                "--temp <tmp_status>) and paste it in, rather than "
+                "hand-listing the codes the sample happened to show.",
+            )
+        )
+    return out
+
+
+# ----- WARN-049  hardcoded sample-derived customer literal
+
+
+# A string literal that is the operand of `contains "..."` or the RHS of an
+# `= "..."` comparison / assignment (NOT a regextract / split / json path,
+# which are reached via `, "..."`).
+_CONTAINS_LIT_RE = re.compile(r'\bcontains\s+"([^"]*)"')
+_EQ_LIT_RE = re.compile(r'(?<![!<>=])=\s*"([^"]*)"')
+_IPV4_LIT_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+_UUID_LIT_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _looks_customer_specific(lit: str) -> bool:
+    """A literal that looks tenant / sample-specific: a path or URL (any
+    '/'), a bare IPv4 address, or a UUID. Standard vendor-agnostic tokens
+    (``kerberos``, ``$``, ``PERMIT``, category words) carry none of these,
+    so they are not flagged; nor are identity strings like ``"Cisco"`` or
+    normalised categories like ``"authentication"``."""
+    if not lit:
+        return False
+    if "/" in lit:
+        return True
+    if _IPV4_LIT_RE.match(lit):
+        return True
+    if _UUID_LIT_RE.search(lit):
+        return True
+    return False
+
+
+def _check_warn049(code_lines: List[str]) -> List[dict]:
+    """A hardcoded literal that came from the sample -- a tenant URL path,
+    hostname, IP or ID -- baked into a `contains "..."` branch or an
+    `= "..."` assignment. This leaks customer-internal data into the rule
+    and does not scale beyond the paths the sample happened to show (the
+    root of the tmp_uri_res_type anti-pattern). Advisory."""
+    if not _is_model(code_lines):
+        return []
+    out: List[dict] = []
+    seen: set = set()
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        for rx in (_CONTAINS_LIT_RE, _EQ_LIT_RE):
+            for m in rx.finditer(cp):
+                lit = m.group(1)
+                if not _looks_customer_specific(lit):
+                    continue
+                key = (i + 1, lit)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(
+                    _violation(
+                        "WARN-049",
+                        "warning",
+                        i + 1,
+                        f"Hardcoded literal \"{lit}\" looks sample / "
+                        "tenant-specific (a path, host, IP or ID). Baking a "
+                        "value observed in the sample into the rule leaks "
+                        "customer-internal data and does not scale beyond the "
+                        "values the sample happened to show.",
+                        "Extract the value dynamically instead -- e.g. "
+                        "arrayindex(regextract(<field>, \"/([^/]+)/\"), N) for "
+                        "a path segment -- or keep the raw value in a "
+                        "free-String XDM field. Only hardcode XDM_CONST "
+                        "members, the observer vendor / product identity, and "
+                        "well-known vendor-agnostic tokens; never invent a "
+                        "classification the source does not define.",
+                    )
+                )
+    return out
+
+
+# ----- WARN-050  endpoint event with no operation verb
+
+# An LHS that maps an endpoint entity (process / file / registry / module). If
+# the rule assigns any of these it is modelling an endpoint event, which should
+# carry a precise xdm.event.operation verb.
+_ENDPOINT_ENTITY_RE = re.compile(
+    r"^\s*xdm\.(?:"
+    r"(?:source|target)\.process\.(?:command_line|name|pid|parent_id|"
+    r"integrity_level|is_injected|executable\.[a-z0-9_]+)"
+    r"|target\.(?:file|file_before|registry|registry_before|module)\.[a-z0-9_]+"
+    r")\s*=(?!=)"
+)
+_EVENT_OPERATION_LHS_RE = re.compile(r"^\s*xdm\.event\.operation\s*=(?!=)")
+
+
+def _check_warn050(code_lines: List[str]) -> List[dict]:
+    """An endpoint event (a process / file / registry / module entity field is
+    mapped) that never assigns xdm.event.operation. The operation verb is where
+    the meaning of an endpoint record lives, and the OPERATION_TYPE enum has a
+    precise member for every process / image / file / registry action, so it
+    should not be left blank. Advisory."""
+    if not _is_model(code_lines):
+        return []
+    entity_line = None
+    has_operation = False
+    for i, raw in enumerate(code_lines):
+        cp = _strip_line_comment(raw)
+        if entity_line is None and _ENDPOINT_ENTITY_RE.search(cp):
+            entity_line = i + 1
+        if _EVENT_OPERATION_LHS_RE.match(cp):
+            has_operation = True
+    if entity_line is None or has_operation:
+        return []
+    return [
+        _violation(
+            "WARN-050",
+            "warning",
+            entity_line,
+            "This rule maps an endpoint entity (process / file / registry / "
+            "module) but never assigns xdm.event.operation. An endpoint "
+            "record's meaning lives in the operation verb.",
+            "Set xdm.event.operation to the precise XDM_CONST.OPERATION_TYPE_* "
+            "verb for the record (PROCESS_CREATE, PROCESS_TERMINATE, "
+            "IMAGE_LOAD, FILE_CREATE, FILE_REMOVE, REGISTRY_SET_VALUE, "
+            "REGISTRY_DELETE_KEY, EXECUTION, ...) -- see the derivation table "
+            "in references/process-mapping.md. Leave it unset only when no "
+            "enum member applies.",
+        )
+    ]
 
 
 # ----- WARN-042  authentication-story mandatory mapping (auto-detected)
@@ -2886,6 +3121,9 @@ def lint(source: str) -> List[dict]:
     findings += _check_warn045(code_lines)
     findings += _check_warn046(code_lines)
     findings += _check_warn047(code_lines)
+    findings += _check_warn048(code_lines)
+    findings += _check_warn049(code_lines)
+    findings += _check_warn050(code_lines)
     findings += _check_info013(code_lines)
 
     findings.sort(key=lambda v: (v["line"], v["rule_id"]))

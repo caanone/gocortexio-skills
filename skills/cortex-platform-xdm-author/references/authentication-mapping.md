@@ -454,3 +454,51 @@ Rules specific to this family:
 
 Constants used above live in [xdm-const.md](xdm-const.md); every target
 path is defined in [xdm-schema.md](xdm-schema.md).
+
+## Windows logon and Kerberos (4624 / 4625 / 4768 / 4769)
+
+Windows Security logon events are the authentication story: 4624 (success),
+4625 (failure), 4634 / 4647 (logoff), and the Kerberos 4768 (TGT request) /
+4769 (service ticket) / 4771 (pre-auth failed). Classify per `event_id` within
+the `Security` channel, apply the full 14-field mandatory set, and tag
+`EVENT_TAG_AUTHENTICATION`. The account that logged on (`TargetUserName` /
+`TargetDomainName`) is the source user; `IpAddress` / `IpPort` is the source
+endpoint; the DC / target host has no transport endpoint in the record, so the
+target tuple takes the auth-story pads. See
+[worked-examples/12-windows-logon-kerberos.md](worked-examples/12-windows-logon-kerberos.md).
+
+Logon type. Map the Windows `LogonType` integer to `xdm.logon.type` over the
+COMPLETE `LOGON_TYPE` closed list (see [xdm-const.md](xdm-const.md)):
+
+| LogonType | `xdm.logon.type` |
+| --- | --- |
+| 2 | `LOGON_TYPE_INTERACTIVE` |
+| 3 | `LOGON_TYPE_NETWORK` |
+| 4 | `LOGON_TYPE_BATCH` |
+| 5 | `LOGON_TYPE_SERVICE` |
+| 6 | `LOGON_TYPE_PROXY` |
+| 7 | `LOGON_TYPE_UNLOCK` |
+| 8 | `LOGON_TYPE_NETWORK_CLEARTEXT` |
+| 9 | `LOGON_TYPE_NEW_CREDENTIALS` |
+| 10 | `LOGON_TYPE_REMOTE_INTERACTIVE` |
+| 11 | `LOGON_TYPE_CACHED_INTERACTIVE` |
+| 12 | `LOGON_TYPE_CACHED_REMOTE_INTERACTIVE` |
+| 13 | `LOGON_TYPE_CACHED_UNLOCK` |
+
+Companion logon fields (map when present): `xdm.auth.service` =
+`LogonProcessName` (or `"Kerberos"` on 4768 / 4769); `xdm.logon.package_name` =
+`AuthenticationPackageName`; `xdm.logon.is_elevated` from `ElevatedToken`
+(`%%1842` -> true, `%%1843` -> false).
+
+Kerberos tickets (4768 / 4769). The ticket encryption type and the failure /
+error code map to `xdm.auth.kerberos_tgt.*` (4768) or
+`xdm.auth.kerberos_tgs.*` (4769). Both are const-typed over large enums whose
+COMPLETE code -> constant crosswalk ships as
+[../assets/kerberos_crosswalk.json](../assets/kerberos_crosswalk.json); render
+the full if-chain with `python3 scripts/kerberos_map.py --render --group
+encryption_type` (and `--group error_code`). Windows logs `TicketEncryptionType`
+and `Status` as HEX (`0x12`, `0x18`) and `to_number` does not parse hex, so
+either match the hex string directly (for the common values) or strip `0x` and
+convert before mapping the decimal chain. Derive `xdm.event.outcome` from the
+Kerberos `Status` (`0x0` -> SUCCESS, else FAILED) -- a 4771 or a non-zero 4768
+Status is a failed pre-authentication.

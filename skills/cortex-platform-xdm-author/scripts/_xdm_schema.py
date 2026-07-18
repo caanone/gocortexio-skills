@@ -38,6 +38,8 @@ CONST_PATH = REFERENCES_DIR / "xdm-const.md"
 # asset rather than being enumerated line-by-line in xdm-const.md. The const
 # loader merges it so every documented MITRE constant still validates.
 MITRE_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "mitre_crosswalk.json"
+HTTP_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "http_status_crosswalk.json"
+KERBEROS_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "kerberos_crosswalk.json"
 
 # A schema line is ``  xdm.foo.bar -- TYPE`` with an optional ``(Array)``
 # suffix. The double-dash separator matches the ASCII convention used
@@ -136,6 +138,34 @@ def _mitre_crosswalk_consts() -> Iterator[Tuple[str, str]]:
         yield f"XDM_CONST.{suffix}", "MITRE_TACTIC"
 
 
+def _http_crosswalk_consts() -> Iterator[Tuple[str, str]]:
+    """Yield ``(full XDM_CONST member, "HTTP_RSP_CODE")`` for every HTTP
+    status constant in the shipped crosswalk asset, so the complete 60-member
+    HTTP_RSP_CODE enum validates even though xdm-const.md lists only a few
+    representative codes. Silent no-op if the asset is absent or unreadable."""
+    try:
+        data = json.loads(HTTP_CROSSWALK_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for member in (data.get("codes") or {}).values():
+        yield member, "HTTP_RSP_CODE"
+
+
+def _kerberos_crosswalk_consts() -> Iterator[Tuple[str, str]]:
+    """Yield ``(full XDM_CONST member, group)`` for every Kerberos constant in
+    the shipped crosswalk asset. The rarer Kerberos groups (principal type, KDC
+    option, message type, PA-data type) live ONLY in the asset, so this merge is
+    what lets the linter validate them; the two commonly-mapped groups are also
+    enumerated in xdm-const.md. Silent no-op if the asset is absent."""
+    try:
+        data = json.loads(KERBEROS_CROSSWALK_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for group, codes in (data.get("groups") or {}).items():
+        for member in (codes or {}).values():
+            yield member, group
+
+
 def load_xdm_consts() -> Dict[str, Set[str]]:
     """Return ``{group: set(full "XDM_CONST.*" members)}`` parsed from
     xdm-const.md. Each member is bucketed into the longest schema group
@@ -174,6 +204,18 @@ def load_xdm_consts() -> Dict[str, Set[str]]:
     # Merge the authoritative MITRE crosswalk: the full ATT&CK enum lives in
     # the asset, so any documented technique / tactic constant validates.
     for member, grp in _mitre_crosswalk_consts():
+        by_group.setdefault(grp, set()).add(member)
+        member_to_group.setdefault(member, grp)
+
+    # Merge the complete HTTP status crosswalk: xdm-const.md lists only a few
+    # representative HTTP_RSP_CODE members, so pull the full 60 from the asset.
+    for member, grp in _http_crosswalk_consts():
+        by_group.setdefault(grp, set()).add(member)
+        member_to_group.setdefault(member, grp)
+
+    # Merge the complete Kerberos crosswalk so all six KERBEROS_* groups
+    # validate (the rarer groups live only in the asset).
+    for member, grp in _kerberos_crosswalk_consts():
         by_group.setdefault(grp, set()).add(member)
         member_to_group.setdefault(member, grp)
 

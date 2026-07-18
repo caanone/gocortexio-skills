@@ -145,6 +145,41 @@ If no matching constant exists for the default case, omit the default branch so 
 
 If unsure which constant to use, OMIT the field entirely. See [pitfall-traps.md](pitfall-traps.md) for the OMIT-and-fall-back rule.
 
+## Never hardcode sample-derived values
+
+An `if(x contains "token", ...)` chain is correct only when the tokens are
+part of the source's own vocabulary and vendor-agnostic -- protocol names
+(`kerberos`, `ntlm`), a `$` machine-account suffix, `THREAT_CATEGORY`
+keywords. It is WRONG to hardcode a value that came from the sample: a
+tenant URL path, a hostname, an IP, an ID, a product-specific route. Baking
+those in leaks customer-internal data into the rule and only ever covers
+the values that one sample happened to show. The linter flags a hardcoded
+path / host / IP / ID literal as WARN-049.
+
+Anti-pattern -- deriving a "resource type" by hardcoding the tenant's URL
+paths (and inventing a classification the source never defines):
+
+```
+// WRONG -- customer paths baked in, not scalable
+tmp_res_type = if(
+    requestUri contains "/keys/", "appkey",
+    requestUri contains "/apps/", "app",
+    requestUri contains "/developers/", "developer")
+```
+
+Extract the segment dynamically instead, so any path works:
+
+```
+// RIGHT -- pull the first path segment; no sample-specific literal
+tmp_res_segment = arrayindex(regextract(requestUri, "^/([^/?]+)"), 0)
+```
+
+If the raw value has no closed-list XDM home, keep it verbatim in a
+free-String field (`xdm.alert.subcategory`, `xdm.observer.action`) rather
+than classifying it against hardcoded sample values. Only ever hardcode
+`XDM_CONST` members, the observer vendor / product identity strings, and
+well-known vendor-agnostic tokens.
+
 ## Event outcome -- only for a real result, not a detection disposition
 
 `xdm.event.outcome` records whether an action succeeded or failed. A detection / IDS / anomaly disposition verb -- `alert`, `monitor`, `investigate`, `isolate` -- is NOT an outcome: the detection fired, it did not "succeed" or "fail". Leave `xdm.event.outcome` UNSET for a pure detection, and keep the disposition verb in `xdm.observer.action`.
@@ -372,12 +407,24 @@ target_ipv4 = if(is_inbound, local_ip,  is_outbound, remote_ip)
 Intermediary fields may feed into other intermediary fields before reaching an XDM assignment. This is valid as long as the chain terminates in an `xdm.*` assignment:
 
 ```
-http_code = to_integer(raw_status_code),
+tmp_http_code = to_integer(raw_status_code),
 xdm.network.http.response_code = if(
-    http_code = 200, XDM_CONST.HTTP_RSP_CODE_OK, ...)
+    tmp_http_code = 200, XDM_CONST.HTTP_RSP_CODE_OK, ...)
 ```
 
-If `http_code` were extracted but NOT mapped, Cortex rejects the rule.
+If `tmp_http_code` were extracted but NOT mapped, Cortex rejects the rule (unused field -- ERR-019).
+
+## HTTP response code: map the COMPLETE status set
+
+`xdm.network.http.response_code` is const-typed over the full HTTP status set. A production source can return any status code, so the mapping must cover ALL of them -- not just the codes the build sample happened to contain. The abbreviated `..., ...)` above is only shorthand: a real rule never hand-lists a partial set.
+
+Do NOT hand-write the chain. Render the complete, authoritative if-chain from the shipped crosswalk and paste it in:
+
+```
+python3 scripts/http_status_map.py --render --temp tmp_http_code
+```
+
+This emits every `tmp_http_code = <code>, XDM_CONST.HTTP_RSP_CODE_<NAME>` branch (all 60 codes) with no default branch, so an unmatched code yields null (safe) rather than a wrong constant. The linter flags a hand-written partial chain as WARN-048.
 
 ## Identity-type mapping
 

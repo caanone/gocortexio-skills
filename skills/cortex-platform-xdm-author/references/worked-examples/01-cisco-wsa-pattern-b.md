@@ -140,11 +140,14 @@ alter
     tmp_acl_tag = arrayindex(regextract(tmp_wsa_log, "ERR:\d+\s+(\S+)\s"), 0),
     tmp_syslog_short = arrayindex(split(to_string(tmp_syslog_fqdn), "."), 0)
 
-// -- Stage 3.5: Derive the W3C ACL decision tag from raw --------------------
+// -- Stage 3.5: Derive the W3C ACL decision tag + cast the status ----------
 // `wsa_acl_decision` is derived in full from `tmp_acl_tag`. It is NOT lifted
-// from a parser-stamped `tmp_wsa_decision` anchor (ERR-027).
+// from a parser-stamped `tmp_wsa_decision` anchor (ERR-027). `tmp_http_status`
+// casts the status string to an integer in a stage AFTER tmp_http_status_str
+// is defined (a same-stage sibling reference would be ERR-024).
 | alter
-    wsa_acl_decision = arrayindex(split(to_string(tmp_acl_tag), "-"), 0)
+    wsa_acl_decision = arrayindex(split(to_string(tmp_acl_tag), "-"), 0),
+    tmp_http_status = to_integer(to_number(tmp_http_status_str))
 
 // -- Stage 4: Map to XDM fields ---------------------------------------------
 | alter
@@ -186,7 +189,71 @@ alter
 
     // Network -- HTTP transaction details
     xdm.network.http.method = tmp_http_method,
-    xdm.network.http.response_code = tmp_http_status_str,
+    // response_code is const-typed over the FULL HTTP status set. The chain
+    // below is the complete crosswalk rendered with
+    // `python3 scripts/http_status_map.py --render --temp tmp_http_status`,
+    // never a hand-listed subset (a proxy sees every code in production).
+    xdm.network.http.response_code = if(
+        tmp_http_status = 100, XDM_CONST.HTTP_RSP_CODE_CONTINUE,
+        tmp_http_status = 101, XDM_CONST.HTTP_RSP_CODE_SWITCHING_PROTOCOLS,
+        tmp_http_status = 102, XDM_CONST.HTTP_RSP_CODE_PROCESSING,
+        tmp_http_status = 103, XDM_CONST.HTTP_RSP_CODE_EARLY_HINTS,
+        tmp_http_status = 200, XDM_CONST.HTTP_RSP_CODE_OK,
+        tmp_http_status = 201, XDM_CONST.HTTP_RSP_CODE_CREATED,
+        tmp_http_status = 202, XDM_CONST.HTTP_RSP_CODE_ACCEPTED,
+        tmp_http_status = 203, XDM_CONST.HTTP_RSP_CODE_NON__AUTHORITATIVE_INFORMATION,
+        tmp_http_status = 204, XDM_CONST.HTTP_RSP_CODE_NO_CONTENT,
+        tmp_http_status = 205, XDM_CONST.HTTP_RSP_CODE_RESET_CONTENT,
+        tmp_http_status = 206, XDM_CONST.HTTP_RSP_CODE_PARTIAL_CONTENT,
+        tmp_http_status = 207, XDM_CONST.HTTP_RSP_CODE_MULTI__STATUS,
+        tmp_http_status = 208, XDM_CONST.HTTP_RSP_CODE_ALREADY_REPORTED,
+        tmp_http_status = 226, XDM_CONST.HTTP_RSP_CODE_IM_USED,
+        tmp_http_status = 300, XDM_CONST.HTTP_RSP_CODE_MULTIPLE_CHOICES,
+        tmp_http_status = 301, XDM_CONST.HTTP_RSP_CODE_MOVED_PERMANENTLY,
+        tmp_http_status = 302, XDM_CONST.HTTP_RSP_CODE_FOUND,
+        tmp_http_status = 303, XDM_CONST.HTTP_RSP_CODE_SEE_OTHER,
+        tmp_http_status = 304, XDM_CONST.HTTP_RSP_CODE_NOT_MODIFIED,
+        tmp_http_status = 305, XDM_CONST.HTTP_RSP_CODE_USE_PROXY,
+        tmp_http_status = 307, XDM_CONST.HTTP_RSP_CODE_TEMPORARY_REDIRECT,
+        tmp_http_status = 308, XDM_CONST.HTTP_RSP_CODE_PERMANENT_REDIRECT,
+        tmp_http_status = 400, XDM_CONST.HTTP_RSP_CODE_BAD_REQUEST,
+        tmp_http_status = 401, XDM_CONST.HTTP_RSP_CODE_UNAUTHORIZED,
+        tmp_http_status = 402, XDM_CONST.HTTP_RSP_CODE_PAYMENT_REQUIRED,
+        tmp_http_status = 403, XDM_CONST.HTTP_RSP_CODE_FORBIDDEN,
+        tmp_http_status = 404, XDM_CONST.HTTP_RSP_CODE_NOT_FOUND,
+        tmp_http_status = 405, XDM_CONST.HTTP_RSP_CODE_METHOD_NOT_ALLOWED,
+        tmp_http_status = 406, XDM_CONST.HTTP_RSP_CODE_NOT_ACCEPTABLE,
+        tmp_http_status = 407, XDM_CONST.HTTP_RSP_CODE_PROXY_AUTHENTICATION_REQUIRED,
+        tmp_http_status = 408, XDM_CONST.HTTP_RSP_CODE_REQUEST_TIMEOUT,
+        tmp_http_status = 409, XDM_CONST.HTTP_RSP_CODE_CONFLICT,
+        tmp_http_status = 410, XDM_CONST.HTTP_RSP_CODE_GONE,
+        tmp_http_status = 411, XDM_CONST.HTTP_RSP_CODE_LENGTH_REQUIRED,
+        tmp_http_status = 412, XDM_CONST.HTTP_RSP_CODE_PRECONDITION_FAILED,
+        tmp_http_status = 413, XDM_CONST.HTTP_RSP_CODE_CONTENT_TOO_LARGE,
+        tmp_http_status = 414, XDM_CONST.HTTP_RSP_CODE_URI_TOO_LONG,
+        tmp_http_status = 415, XDM_CONST.HTTP_RSP_CODE_UNSUPPORTED_MEDIA_TYPE,
+        tmp_http_status = 416, XDM_CONST.HTTP_RSP_CODE_RANGE_NOT_SATISFIABLE,
+        tmp_http_status = 417, XDM_CONST.HTTP_RSP_CODE_EXPECTATION_FAILED,
+        tmp_http_status = 421, XDM_CONST.HTTP_RSP_CODE_MISDIRECTED_REQUEST,
+        tmp_http_status = 422, XDM_CONST.HTTP_RSP_CODE_UNPROCESSABLE_CONTENT,
+        tmp_http_status = 423, XDM_CONST.HTTP_RSP_CODE_LOCKED,
+        tmp_http_status = 424, XDM_CONST.HTTP_RSP_CODE_FAILED_DEPENDENCY,
+        tmp_http_status = 425, XDM_CONST.HTTP_RSP_CODE_TOO_EARLY,
+        tmp_http_status = 426, XDM_CONST.HTTP_RSP_CODE_UPGRADE_REQUIRED,
+        tmp_http_status = 428, XDM_CONST.HTTP_RSP_CODE_PRECONDITION_REQUIRED,
+        tmp_http_status = 429, XDM_CONST.HTTP_RSP_CODE_TOO_MANY_REQUESTS,
+        tmp_http_status = 431, XDM_CONST.HTTP_RSP_CODE_REQUEST_HEADER_FIELDS_TOO_LARGE,
+        tmp_http_status = 451, XDM_CONST.HTTP_RSP_CODE_UNAVAILABLE_FOR_LEGAL_REASONS,
+        tmp_http_status = 500, XDM_CONST.HTTP_RSP_CODE_INTERNAL_SERVER_ERROR,
+        tmp_http_status = 501, XDM_CONST.HTTP_RSP_CODE_NOT_IMPLEMENTED,
+        tmp_http_status = 502, XDM_CONST.HTTP_RSP_CODE_BAD_GATEWAY,
+        tmp_http_status = 503, XDM_CONST.HTTP_RSP_CODE_SERVICE_UNAVAILABLE,
+        tmp_http_status = 504, XDM_CONST.HTTP_RSP_CODE_GATEWAY_TIMEOUT,
+        tmp_http_status = 505, XDM_CONST.HTTP_RSP_CODE_HTTP_VERSION_NOT_SUPPORTED,
+        tmp_http_status = 506, XDM_CONST.HTTP_RSP_CODE_VARIANT_ALSO_NEGOTIATES,
+        tmp_http_status = 507, XDM_CONST.HTTP_RSP_CODE_INSUFFICIENT_STORAGE,
+        tmp_http_status = 508, XDM_CONST.HTTP_RSP_CODE_LOOP_DETECTED,
+        tmp_http_status = 511, XDM_CONST.HTTP_RSP_CODE_NETWORK_AUTHENTICATION_REQUIRED),
     xdm.network.http.content_type = if(tmp_mime_type != "-" and tmp_mime_type != null, tmp_mime_type, null),
     xdm.network.http.url = tmp_url,
     xdm.network.http.domain = tmp_url_host,
@@ -202,5 +269,6 @@ alter
 - `-` as empty marker. Every Squid-style field uses `-` for "absent". The rule explicitly guards `if(tmp_user_raw != "-" and tmp_user_raw != null, ...)` before mapping. A naive map would put the string `"-"` into `xdm.source.user.username` and downstream queries would match on it.
 - `to_string()` wrap before `split`/`regextract`. Every `arrayindex` output is wrapped before being passed to a downstream string function. Missing the cast produces a generic parser error with no useful line number -- see ERR-018 in [parser-idioms.md](../parser-idioms.md).
 - Cache-result + W3C-decision two-tier outcome. `xdm.event.outcome` first tries to match the cache-result token (`TCP_MISS`, `TCP_DENIED`, etc.); if that doesn't match, it falls back to the W3C ACL decision prefix (`BLOCK_*`, `ALLOW_*`, `MONITOR*`). This is defence-in-depth for the unfamiliar-token case.
+- Complete HTTP response-code map. `xdm.network.http.response_code` is const-typed over the full status set, so the rule casts the status string to an integer (`tmp_http_status`) and maps EVERY code via the crosswalk chain rendered by `scripts/http_status_map.py`, not just the codes this sample happened to show. A proxy sees the full range in production; a partial hand-written chain silently drops the rest (WARN-048). Never assign the raw status string straight to the const field.
 - `xdm.intermediate.*` for the proxy. The WSA appliance is BOTH the observer AND the network intermediate (it sits between source client and target server). Both are mapped from `tmp_syslog_fqdn` / `tmp_syslog_short`.
 - NOT MAPPED (implicit -- would go in the MAPPED-header block of a fresh rule): the rest of the ACL tag's seven hyphen-components beyond the decision prefix; the AVC/AMW verdict columns; the W3C free-form audit columns inside `<...>`. They're vendor-specific and have no XDM home.

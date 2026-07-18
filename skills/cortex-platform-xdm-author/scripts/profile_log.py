@@ -1115,6 +1115,16 @@ _PROCESS_CMD_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Endpoint-telemetry shape: a Windows / Sysmon / EVTX record carries an
+# event-id discriminator plus an event_data container or an event channel /
+# provider. Used only to enrich process guidance (the channel/verb model);
+# never a detection gate on its own.
+_ENDPOINT_SHAPE_RE = re.compile(
+    r"(?<![a-z0-9])(event[_ ]?id|eventid|event[_ ]?data|"
+    r"channel|provider[_ ]?name|provider[_ ]?guid)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
 _PROCESS_SIGNAL_CAP = 24
 
 
@@ -1191,18 +1201,40 @@ def detect_process(
             if m:
                 _add(path, m.group(1), "weak")
 
+    # An endpoint-telemetry shape (Windows Security / Sysmon / EVTX): an
+    # event-id discriminator alongside an event_data container or a channel.
+    # Recorded only to tailor guidance -- it never changes the detection gate.
+    endpoint_shape = any(
+        _ENDPOINT_SHAPE_RE.search(p.lower()) for p in paths
+    )
+
     out: dict = {"detected": strong, "signals": signals[:12]}
     if strong:
         out["recommended_fields"] = list(_PROCESS_RECOMMENDED)
-        out["guidance"] = (
+        guidance = (
             "Process / command-execution signal detected. Map the "
             "xdm.*.process.* family the log provides (see "
             "references/process-mapping.md). Recommended, not mandatory "
-            "(advisory lint WARN-044). A TACACS+ / AAA command-accounting "
-            "(cmd=) record is a command execution, not authentication: map "
-            "the command to xdm.target.process.command_line with operation "
+            "(advisory lint WARN-044). Set xdm.event.operation to the precise "
+            "XDM_CONST.OPERATION_TYPE_* verb (PROCESS_CREATE, IMAGE_LOAD, "
+            "FILE_REMOVE, REGISTRY_SET_VALUE, EXECUTION, ...); do not leave it "
+            "blank when a verb fits. A TACACS+ / AAA command-accounting (cmd=) "
+            "record is a command execution, not authentication: map the "
+            "command to xdm.target.process.command_line with operation "
             "OPERATION_TYPE_AUDIT and no outcome."
         )
+        if endpoint_shape:
+            out["endpoint_shape"] = True
+            guidance += (
+                " This looks like Windows / Sysmon / EVTX endpoint telemetry: "
+                "classify each record on three fields -- xdm.event.type = the "
+                "channel / source label, xdm.event.original_event_type = the "
+                "per-event semantic name, xdm.event.operation = the verb -- and "
+                "expect blank xdm.event.tags (there is no process story tag). "
+                "A modelled endpoint record does NOT take the "
+                "GOCORTEX_UNMODELLED catch-all."
+            )
+        out["guidance"] = guidance
     return out
 
 

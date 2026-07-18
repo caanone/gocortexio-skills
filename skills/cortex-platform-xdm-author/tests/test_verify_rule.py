@@ -253,5 +253,27 @@ class TestRecordLevelClassification(unittest.TestCase):
                          "GOCORTEX_UNMODELLED")
 
 
+class TestBackslashStringSplit(unittest.TestCase):
+    """A regex string literal that ends in an even run of backslashes
+    (a Windows DOMAIN\\user split ends `...\\\\"`) must not swallow the
+    assignment boundary in _split_assignments -- the escaped-backslash-
+    before-quote case."""
+
+    def test_domain_user_split(self):
+        rule = (
+            "[MODEL: dataset=win_raw]\n"
+            "filter\n    _raw_log != null\n"
+            "| alter\n"
+            '    tmp_u = json_extract_scalar(_raw_log, "$.User")\n'
+            "| alter\n"
+            '    xdm.source.user.domain = arrayindex(regextract(to_string(tmp_u), "^([^\\\\\\\\]+)\\\\\\\\"), 0),\n'
+            '    xdm.source.user.username = arrayindex(regextract(to_string(tmp_u), "\\\\\\\\([^\\\\\\\\]+)$"), 0)\n'
+            ";\n"
+        )
+        out = _v.evaluate_rule(rule, json.dumps({"User": "ACME\\alice"}))
+        self.assertEqual(out["xdm.source.user.domain"], "ACME")
+        self.assertEqual(out["xdm.source.user.username"], "alice")
+
+
 if __name__ == "__main__":
     unittest.main()
