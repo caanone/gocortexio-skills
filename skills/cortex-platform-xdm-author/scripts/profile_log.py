@@ -1371,6 +1371,48 @@ def detect_syslog_relay(text: str) -> dict:
     return out
 
 
+def detect_cloud(fields: dict) -> dict:
+    """Auto-detect a cloud audit-log source (AWS CloudTrail, Azure Activity /
+    Entra sign-in, GCP Cloud Audit) by its distinctive JSON field paths.
+    Conservative: each provider needs two corroborating markers so an ordinary
+    JSON log that happens to carry one generic key does not trip it. Advisory --
+    steers toward references/cloud-mapping.md; never blocks."""
+    paths = " ".join(
+        info.get("path", "").lower() for info in fields.values()
+    )
+
+    def has(*needles: str) -> bool:
+        return all(n in paths for n in needles)
+
+    provider = None
+    if has("eventname") and (
+        "eventsource" in paths or "useridentity" in paths
+        or "recipientaccountid" in paths
+    ):
+        provider = "aws"
+    elif (has("operationname") and ("resulttype" in paths or "calleripaddress" in paths)) \
+            or (has("userprincipalname") and "conditionalaccessstatus" in paths):
+        provider = "azure"
+    elif has("protopayload", "methodname") or has("authenticationinfo", "principalemail"):
+        provider = "gcp"
+
+    out: dict = {"detected": provider is not None}
+    if provider:
+        out["provider"] = provider
+        out["guidance"] = (
+            f"Cloud audit-log source detected ({provider}). Map on the cloud "
+            "model: xdm.event.type = the service, xdm.event.original_event_type "
+            "= the raw action (eventName / operationName / methodName), "
+            "xdm.event.operation = the verb DERIVED from the action-naming "
+            "convention, and xdm.event.tags = CLOUD (plus AUTHENTICATION for a "
+            "console login / interactive sign-in). Set xdm.source.cloud.provider "
+            "reliably; keep the raw service name in xdm.source.cloud.source_type "
+            "and set xdm.source.cloud.service only on a confident known match. "
+            "See references/cloud-mapping.md."
+        )
+    return out
+
+
 def profile(source_path: str, text: str) -> dict:
     fmt = detect_format(text)
     try:
@@ -1388,6 +1430,7 @@ def profile(source_path: str, text: str) -> dict:
         fields, records, auth_detected=bool(auth_block.get("detected"))
     )
     process_block = detect_process(fields, records)
+    cloud_block = detect_cloud(fields)
     return {
         "source": source_path,
         "detected_format": fmt,
@@ -1397,6 +1440,7 @@ def profile(source_path: str, text: str) -> dict:
         "authentication": auth_block,
         "network": network_block,
         "process": process_block,
+        "cloud": cloud_block,
         "mitre": detect_mitre(fields, records),
         "syslog_relay": detect_syslog_relay(text),
         "fields": list(fields.values()),

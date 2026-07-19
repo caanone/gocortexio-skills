@@ -844,5 +844,32 @@ class TestCelonisAudit(unittest.TestCase):
         self.assertIn("xdm.source.user.roles", cand.get("userRole", []))
 
 
+class TestCloudDetection(unittest.TestCase):
+    """The cloud detector recognises the CloudTrail shape and names the
+    provider, and stays silent on a non-cloud JSON source."""
+
+    def test_cloudtrail_detected_as_aws(self):
+        ws = _profile_fixture("aws_cloudtrail.jsonl")
+        cloud = ws.get("cloud") or {}
+        self.assertTrue(cloud.get("detected"))
+        self.assertEqual(cloud.get("provider"), "aws")
+
+    def test_azure_detected(self):
+        ws = _profile_fixture("microsoft_azure.jsonl")
+        cloud = ws.get("cloud") or {}
+        self.assertTrue(cloud.get("detected"))
+        self.assertEqual(cloud.get("provider"), "azure")
+
+    def test_gcp_detected(self):
+        ws = _profile_fixture("gcp_cloud_audit.jsonl")
+        cloud = ws.get("cloud") or {}
+        self.assertTrue(cloud.get("detected"))
+        self.assertEqual(cloud.get("provider"), "gcp")
+
+    def test_non_cloud_json_not_flagged(self):
+        ws = _profile_fixture("auth_event.jsonl")
+        self.assertFalse((ws.get("cloud") or {}).get("detected"))
+
+
 if __name__ == "__main__":
     unittest.main()

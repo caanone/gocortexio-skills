@@ -1488,6 +1488,17 @@ class TestWarn049HardcodedLiteral(unittest.TestCase):
         )
         self.assertNotIn("WARN-049", self._ids(rule))
 
+    def test_regex_match_operand_not_flagged(self):
+        # A `~= "regex"` operand is a regular expression, not a customer
+        # literal, even when it contains a slash (e.g. Azure operationName
+        # verb suffixes). WARN-049 must not treat it as a hardcoded value.
+        rule = (
+            self._HEAD
+            + '    tmp_v = if(tmp_op ~= "/write$", "w", tmp_op ~= "/delete$", "d")\n'
+            "| alter\n    xdm.event.description = tmp_v\n;\n"
+        )
+        self.assertNotIn("WARN-049", self._ids(rule))
+
 
 class TestWarn047PrependFragile(unittest.TestCase):
     """A syslog rule must extract identically whether the record arrives

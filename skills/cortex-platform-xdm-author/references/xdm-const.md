@@ -356,12 +356,29 @@ XDM_CONST.IP_PROTOCOL_UDP
 XDM_CONST.IP_PROTOCOL_ICMP
 ```
 
-## Cloud provider
+## Cloud provider (`xdm.*.cloud.provider`)
+
+Closed list for the cloud platform. Map from the source identity (a
+CloudTrail record is AWS, an Azure Activity / sign-in record is AZURE, a
+GCP Cloud Audit record is GCP).
 
 ```
 XDM_CONST.CLOUD_PROVIDER_AWS
 XDM_CONST.CLOUD_PROVIDER_AZURE
 XDM_CONST.CLOUD_PROVIDER_GCP
+XDM_CONST.CLOUD_PROVIDER_ALIBABA
+XDM_CONST.CLOUD_PROVIDER_ON_PREM
+```
+
+## Agent type (`xdm.source.agent.type`, `xdm.target.agent.type`)
+
+Closed list for the kind of collecting agent.
+
+```
+XDM_CONST.AGENT_TYPE_REGULAR
+XDM_CONST.AGENT_TYPE_CLOUD
+XDM_CONST.AGENT_TYPE_COLLECTOR
+XDM_CONST.AGENT_TYPE_VDI
 ```
 
 ## OS family
@@ -764,7 +781,14 @@ XDM_CONST.REGISTRY_VALUE_TYPE_REG_QWORD_LITTLE_ENDIAN
 
 The following groups have large, vendor-specific, or unstable value lists and are NOT enumerated in this file. For these, follow the OMIT-and-fall-back rule in [pitfall-traps.md](pitfall-traps.md) -- do NOT invent constants.
 
-`AGENT_TYPE`, `CLOUD_SERVICE_TYPE`, `DCERPC_OPERATION`, `DHCP_MESSAGE_TYPE`, `DNS_RECORD_TYPE`, `DNS_RESPONSE_CODE`, `DB_OPERATION`, `LDAP_BIND_AUTH_TYPE`, `LDAP_OPERATION`, `LDAP_SCOPE`, `SCOPE_TYPE`.
+`CLOUD_SERVICE_TYPE`, `DCERPC_OPERATION`, `DHCP_MESSAGE_TYPE`, `DNS_RECORD_TYPE`, `DNS_RESPONSE_CODE`, `DB_OPERATION`, `LDAP_BIND_AUTH_TYPE`, `LDAP_OPERATION`, `LDAP_SCOPE`, `SCOPE_TYPE`.
+
+Note: `xdm.*.cloud.service` (`CLOUD_SERVICE_TYPE`) is a very large, fast-moving
+per-service enum (hundreds of AWS / Azure / GCP services). Do NOT attempt to
+complete it. Map `xdm.*.cloud.provider` reliably from the source, keep the raw
+service name in a free-String field (`xdm.*.cloud.source_type`), and set
+`xdm.*.cloud.service` only when a vendor value confidently matches a known
+member -- otherwise omit it. See [cloud-mapping.md](cloud-mapping.md).
 
 Note: `xdm.*.process.integrity_level` is typed Number, not a constant. Map the
 Windows integrity word to an integer -- Untrusted 0, Low 1, Medium 2, High 3,

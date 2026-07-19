@@ -1,0 +1,4 @@
+{"operationName":"Microsoft.Compute/virtualMachines/write","resultType":"Success","category":"Administrative","caller":"alice@contoso.com","callerIpAddress":"20.1.2.3","resourceId":"/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1"}
+{"operationName":"Microsoft.Storage/storageAccounts/delete","resultType":"Failure","category":"Administrative","caller":"svc-deploy@contoso.com","callerIpAddress":"20.1.2.9","resourceId":"/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/sa1"}
+{"userPrincipalName":"bob@contoso.com","ipAddress":"20.4.5.6","appDisplayName":"Azure Portal","clientAppUsed":"Browser","category":"SignInLogs","conditionalAccessStatus":"success","status":{"errorCode":50126}}
+{"userPrincipalName":"carol@contoso.com","ipAddress":"20.4.5.7","appDisplayName":"Office 365","clientAppUsed":"Browser","category":"SignInLogs","conditionalAccessStatus":"notApplied","status":{"errorCode":0}}

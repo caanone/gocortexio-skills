@@ -2096,7 +2096,11 @@ def _check_warn048(code_lines: List[str]) -> List[dict]:
 # `= "..."` comparison / assignment (NOT a regextract / split / json path,
 # which are reached via `, "..."`).
 _CONTAINS_LIT_RE = re.compile(r'\bcontains\s+"([^"]*)"')
-_EQ_LIT_RE = re.compile(r'(?<![!<>=])=\s*"([^"]*)"')
+# The RHS of an `= "..."` comparison / assignment. The negative lookbehind
+# excludes `!=`, `<=`, `>=`, `==` and `~=` -- in particular a `~= "regex"`
+# match operand is a regular expression, not a hardcoded value, and regexes
+# legitimately contain `/`, so they must not be treated as customer literals.
+_EQ_LIT_RE = re.compile(r'(?<![!<>=~])=\s*"([^"]*)"')
 _IPV4_LIT_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 _UUID_LIT_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
