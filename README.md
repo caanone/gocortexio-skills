@@ -16,7 +16,6 @@ Portable skill bundles for doing cool stuff with the Palo Alto Networks Cortex P
 | Bundle | Purpose |
 | --- | --- |
 | [cortex-platform-xdm-author](skills/cortex-platform-xdm-author/) | Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL). Produce a complete `[MODEL: dataset=..._raw]` rule from raw vendor log samples, with a MAPPED-header comment block. MODEL-only. |
-| [cortex-platform-use-case-consultant](skills/cortex-platform-use-case-consultant/) | Consult on Cortex XSIAM use cases across a three-phase lifecycle: assess the environment and its telemetry, recommend and prioritise use cases, then specify their implementation. In development (0.1.0). |
 
 ## Installing a bundle
 
