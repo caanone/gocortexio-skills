@@ -1,0 +1,33 @@
+{
+  "name": "gocortexio-skills",
+  "owner": {
+    "name": "GoCortexIO"
+  },
+  "metadata": {
+    "description": "GoCortexIO skill bundles for the Palo Alto Networks Cortex Platform",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "gocortex-skills",
+      "description": "Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL) from raw vendor log samples. Produces a complete MODEL rule with a MAPPED-header comment block, backed by an offline profiler, linter and verifier.",
+      "source": "./",
+      "strict": false,
+      "license": "AGPL-3.0-or-later",
+      "homepage": "https://github.com/gocortexio/skills",
+      "keywords": [
+        "cortex",
+        "xsiam",
+        "xql",
+        "xdm",
+        "palo-alto-networks",
+        "datamodel",
+        "security",
+        "siem"
+      ],
+      "skills": [
+        "./skills/cortex-platform-xdm-author"
+      ]
+    }
+  ]
+}
