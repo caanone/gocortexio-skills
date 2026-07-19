@@ -9,13 +9,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # GoCortexIO Skills
 
-Portable skill bundles for doing cool still with the Palo Alto Networks Cortex Platform. Each subdirectory is one self-contained bundle: a SKILL.md entry point, on-demand `references/` markdown, optional `scripts/` and `assets/`, and an AGPL-3.0-or-later licence file. Bundles follow the on-disk skill convention: a `SKILL.md` at the bundle root plus optional `references/`, `scripts/`, and `assets/` siblings. Any host that loads skills from this layout can use them. Nothing in a bundle is tied to a particular runner or model.
+Portable skill bundles for doing cool stuff with the Palo Alto Networks Cortex Platform. Each subdirectory is one self-contained bundle: a SKILL.md entry point, on-demand `references/` markdown, optional `scripts/` and `assets/`, and an AGPL-3.0-or-later licence file. Bundles follow the on-disk skill convention: a `SKILL.md` at the bundle root plus optional `references/`, `scripts/`, and `assets/` siblings. Any host that loads skills from this layout can use them. Nothing in a bundle is tied to a particular runner or model.
 
 ## Available bundles
 
 | Bundle | Purpose |
 | --- | --- |
-| [cortex-platform-xdm-author](cortex-platform-xdm-author/) | Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL). Produce a complete `[MODEL: dataset=..._raw]` rule from raw vendor log samples, with a MAPPED-header comment block. MODEL-only. |
+| [cortex-platform-xdm-author](skills/cortex-platform-xdm-author/) | Author Cortex XSIAM Data Model Rules in Cortex Query Language (XQL). Produce a complete `[MODEL: dataset=..._raw]` rule from raw vendor log samples, with a MAPPED-header comment block. MODEL-only. |
+| [cortex-platform-use-case-consultant](skills/cortex-platform-use-case-consultant/) | Consult on Cortex XSIAM use cases across a three-phase lifecycle: assess the environment and its telemetry, recommend and prioritise use cases, then specify their implementation. In development (0.1.0). |
 
 ## Installing a bundle
 
@@ -29,7 +30,7 @@ The `cortex-platform-xdm-author` bundle's `references/` are derived markdown sna
 
 ## Scope
 
-Each bundle states its own scope in its `SKILL.md`. The `cortex-platform-xdm-author` bundle covers Data Model Rules only; Parsing Rules (`[INGEST: ...]`) and parser-stamped anchor columns are out of scope.
+Each bundle states its own scope in its `SKILL.md`. The `cortex-platform-xdm-author` bundle covers Data Model Rules only; Parsing Rules (`[INGEST: ...]`) and parser-stamped anchor columns are out of scope. The `cortex-platform-use-case-consultant` bundle is in early development; its `SKILL.md` states what is delivered and what is not yet defined.
 
 ## Runtime dependencies
 
