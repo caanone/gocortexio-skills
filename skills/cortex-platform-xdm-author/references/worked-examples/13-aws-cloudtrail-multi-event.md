@@ -67,7 +67,6 @@ filter
     xdm.event.description = concat(coalesce(tmp_event, "?"), " on ", coalesce(tmp_source, "aws")),
     xdm.source.cloud.provider = XDM_CONST.CLOUD_PROVIDER_AWS,
     xdm.source.cloud.region = tmp_region,
-    xdm.source.cloud.source_type = tmp_source,
     xdm.source.cloud.project_id = tmp_account,
     xdm.source.ipv4 = if(tmp_ip ~= "^\d+\.\d+\.\d+\.\d+$", tmp_ip, null),
     xdm.source.ipv6 = if(to_string(tmp_ip) ~= ":", tmp_ip, null),
@@ -123,10 +122,12 @@ filter
   IPv4 map is gated on a dotted-quad shape -- the service name can never land in
   `xdm.source.ipv4`.
 - Cloud entity. `xdm.source.cloud.provider = CLOUD_PROVIDER_AWS`,
-  `region` = `awsRegion`, `project_id` = `recipientAccountId`, and the raw service
-  goes to the free-String `xdm.source.cloud.source_type`. `xdm.source.cloud.service`
-  is deliberately NOT set (the CLOUD_SERVICE_TYPE enum is not completable) -- see
-  [cloud-mapping.md](../cloud-mapping.md).
+  `region` = `awsRegion`, `project_id` = `recipientAccountId`. `xdm.source.cloud.service`
+  is deliberately NOT set (the CLOUD_SERVICE_TYPE enum is not completable), and the
+  raw service name (`eventSource`) is carried in `xdm.event.description` rather than a
+  String field -- `xdm.source.cloud.source_type` is a banned XCloud asset field
+  (lint ERR-029). See [cloud-mapping.md](../cloud-mapping.md) and
+  [banned-fields.md](../banned-fields.md).
 - Identity from the nested userIdentity. `userName`, then the assumed-role
   session issuer, then the ARN -- via `coalesce` over the deep paths.
 
@@ -142,8 +143,9 @@ NOT MAPPED
                       target field when a single clear resource applies
   additionalEventData / tlsDetails -- session / TLS metadata with no primary
                       XDM home; retain in the raw record
-  cloud.service (CLOUD_SERVICE_TYPE) -- not completable; raw service kept in
-                      xdm.source.cloud.source_type
+  cloud.service (CLOUD_SERVICE_TYPE) -- not completable; raw service (eventSource)
+                      kept in xdm.event.description (never xdm.source.cloud.source_type,
+                      a banned XCloud asset field)
 ```
 
 ## Checklist
@@ -155,6 +157,6 @@ NOT MAPPED
 [ ] ConsoleLogin/AssumeRole -> AUTHENTICATION + CLOUD, auth mandatory set padded
 [ ] outcome: errorCode -> FAILED first, then ConsoleLogin verdict, then success
 [ ] sourceIPAddress gated on a dotted-quad shape (service DNS name never in ipv4)
-[ ] cloud.provider set; raw service in cloud.source_type; cloud.service omitted
+[ ] cloud.provider set; cloud.service omitted; raw service in event.description (not source_type)
 [ ] unknown record -> GOCORTEX_UNMODELLED; proven with verify_rule.py
 ```

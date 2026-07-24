@@ -785,10 +785,12 @@ The following groups have large, vendor-specific, or unstable value lists and ar
 
 Note: `xdm.*.cloud.service` (`CLOUD_SERVICE_TYPE`) is a very large, fast-moving
 per-service enum (hundreds of AWS / Azure / GCP services). Do NOT attempt to
-complete it. Map `xdm.*.cloud.provider` reliably from the source, keep the raw
-service name in a free-String field (`xdm.*.cloud.source_type`), and set
+complete it. Map `xdm.*.cloud.provider` reliably from the source, and set
 `xdm.*.cloud.service` only when a vendor value confidently matches a known
-member -- otherwise omit it. See [cloud-mapping.md](cloud-mapping.md).
+member -- otherwise omit it and record the raw service name in the NOT MAPPED
+block. Do NOT route the raw service name to `xdm.*.cloud.source_type`: that is a
+banned internal-only XCloud asset field (lint ERR-029). See
+[cloud-mapping.md](cloud-mapping.md) and [banned-fields.md](banned-fields.md).
 
 Note: `xdm.*.process.integrity_level` is typed Number, not a constant. Map the
 Windows integrity word to an integer -- Untrusted 0, Low 1, Medium 2, High 3,

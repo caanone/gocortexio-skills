@@ -7,6 +7,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 Per-version change history for the `cortex-platform-xdm-author` bundle. The current version is declared in the `SKILL.md` frontmatter; this file is not loaded at runtime and exists for provenance.
 
+## 1.8.1
+
+- Added a banned-field mechanism: `assets/banned_fields.json` registers real Cortex XDM paths that must never be assigned in a MODEL rule because they belong to an internal or non-event data model (Cortex rejects them at compile time with "not part of the selected data model"). New lint ERR-029 blocks any assignment to a registered path with the reason and the correct alternative; ERR-020 defers to it. Documented in `references/banned-fields.md`; a bundle test keeps the doc, the registry, the schema and the shipped references in sync.
+- Banned `xdm.source.cloud.source_type`, `xdm.target.cloud.source_type` and `xdm.intermediate.cloud.source_type`: the field is an internal-only XCloud asset-inventory attribute (asset types such as `t2.micro`, `gp3`), not part of any event data model. Confirmed against tenant validation.
+- Removed the three paths from `references/xdm-schema.md` and corrected every place that recommended parking the raw cloud service name there (SKILL.md cloud story and hard rules, `cloud-mapping.md`, `pitfall-traps.md`, `xdm-const.md`, the profiler's cloud hint, and worked examples 13 / 14 / 15). The raw service name now stays in `xdm.event.type` / `xdm.event.description` or the NOT MAPPED block; `xdm.*.cloud.service` (CLOUD_SERVICE_TYPE) is still set only on a confident known match.
+
 ## 1.8.0
 
 First stable release of the 1.8 line, consolidating the 1.8.0-beta series. Hardens three ways a rule could bake in sample-specific data instead of the authoritative domain:

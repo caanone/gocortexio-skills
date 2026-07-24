@@ -85,9 +85,9 @@ General rule: whenever the vendor value does not match any constant listed in [x
 
 If the vendor category string does not map to a known `XDM_CONST.THREAT_CATEGORY_*`, OMIT `xdm.alert.category` and use `xdm.alert.subcategory` (String) for the raw vendor category text instead.
 
-### `xdm.{source,target,intermediate}.cloud.service` -> `*.cloud.source_type` (String)
+### `xdm.{source,target,intermediate}.cloud.service` (OMIT when no const matches)
 
-Requires `XDM_CONST.CLOUD_SERVICE_TYPE_*`. If the vendor service name does not map, OMIT the XDM_CONST field and use the parallel `xdm.{source,target,intermediate}.cloud.source_type` (String) for the raw service name.
+Requires `XDM_CONST.CLOUD_SERVICE_TYPE_*`. If the vendor service name does not map, OMIT the XDM_CONST field and record the raw service name in the NOT MAPPED block (or `xdm.event.description` if useful). Do NOT route it to `xdm.{source,target,intermediate}.cloud.source_type` -- that is a banned internal-only XCloud asset field (asset type, e.g. `t2.micro`), rejected by Cortex and blocked by lint ERR-029. See [banned-fields.md](banned-fields.md).
 
 ### `xdm.alert.mitre_techniques`
 
@@ -119,8 +119,10 @@ Do NOT invent constants for any of the above. The Cortex IDE rejects unknown `XD
 
 Every underscore-prefixed variable you extract MUST appear on the RHS of an XDM field assignment. If you extract `tmp_cloud_service` but cannot find a valid XDM_CONST for `xdm.source.cloud.service`, either:
 
-1. Map it to the String fallback field (e.g. `xdm.source.cloud.source_type`).
+1. Fold the raw value into `xdm.event.description` if it aids the summary, and note it in the NOT MAPPED block.
 2. Remove the extraction entirely.
+
+Do NOT park it in `xdm.source.cloud.source_type` -- that field is banned (see [banned-fields.md](banned-fields.md)).
 
 Never leave orphaned temp variables -- they cause a blocking validation error.
 

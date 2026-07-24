@@ -33,6 +33,9 @@ Structural and parser-conformance checks:
 Schema-aware checks (XDM schema + XDM_CONST loaded from references):
 
     ERR-020  Invented xdm.* assignment target (not a real leaf field).
+    ERR-029  Assignment to a banned (internal-only) XDM field -- a real
+             Cortex path that is not part of any event data model
+             (assets/banned_fields.json).
     WARN-014 Quoted XDM_CONST value (dropped as a string literal).
     WARN-035 Array-typed XDM field assigned a scalar value.
     WARN-037 Log-level word (warning / error / notice / debug) echoed into
@@ -106,6 +109,9 @@ from typing import Iterable, List, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _xdm_schema import (  # noqa: E402
+    banned_field,
+    is_banned_field,
+    load_banned_fields,
     load_xdm_consts,
     load_xdm_paths,
     xdm_path_exists,
@@ -1268,6 +1274,10 @@ def _check_err020(code_lines: List[str]) -> List[dict]:
         seen.add(path)
         if xdm_path_exists(path):
             continue
+        # A banned field is real but off-limits; ERR-029 owns it with a
+        # precise message, so do not also flag it as an invented path.
+        if is_banned_field(path):
+            continue
         scored = sorted(known, key=lambda p: _edit_distance(path, p))[:3]
         hint = f" Closest matches: {', '.join(scored)}." if scored else ""
         out.append(
@@ -1279,6 +1289,49 @@ def _check_err020(code_lines: List[str]) -> List[dict]:
                 f"assignments to invented paths.{hint}",
                 "Use a real XDM field from references/xdm-schema.md, or pick "
                 "the closest semantic match above.",
+            )
+        )
+    return out
+
+
+# ----- ERR-029  assignment to a banned (internal-only) XDM field
+
+
+def _check_err029(code_lines: List[str]) -> List[dict]:
+    """Flag any assignment to a banned XDM path. A banned field is a real
+    Cortex path that must never be mapped in a MODEL rule because it
+    belongs to an internal / non-event data model (rejected at compile
+    time with 'not part of the selected data model'). The registry is
+    assets/banned_fields.json."""
+    if not _is_model(code_lines):
+        return []
+    if not load_banned_fields():
+        return []
+    out: List[dict] = []
+    seen: set = set()
+    lhs_re = re.compile(r"^\s*(xdm\.[\w.]+)\s*=(?!=)")
+    for i, raw in enumerate(code_lines):
+        if raw.lstrip().startswith("//"):
+            continue
+        m = lhs_re.match(raw.split("//", 1)[0])
+        if not m:
+            continue
+        path = m.group(1)
+        if path in seen:
+            continue
+        seen.add(path)
+        entry = banned_field(path)
+        if entry is None:
+            continue
+        out.append(
+            _violation(
+                "ERR-029",
+                "error",
+                i + 1,
+                f"'{path}' is a banned XDM field and must never be "
+                f"assigned in a MODEL rule. {entry['reason']}",
+                entry["alternative"]
+                or "Remove the assignment; see references/banned-fields.md.",
             )
         )
     return out
@@ -3105,6 +3158,7 @@ def lint(source: str) -> List[dict]:
     findings += _check_err018(code_lines)
     findings += _check_err019(code_lines, df)
     findings += _check_err020(code_lines)
+    findings += _check_err029(code_lines)
     findings += _check_err024(code_lines, stage_of, stage_start)
     findings += _check_err025(code_lines)
     findings += _check_err027(code_lines, stage_of, stage_start)

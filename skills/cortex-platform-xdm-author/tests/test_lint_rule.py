@@ -107,6 +107,7 @@ class TestSyntacticRules(unittest.TestCase):
         ("err025_concat_hidden.xql", "ERR-025"),
         ("err027_anchor_read.xql", "ERR-027"),
         ("err028_underscore_temp.xql", "ERR-028"),
+        ("err029_banned_cloud_source_type.xql", "ERR-029"),
         ("warn014_quoted_const.xql", "WARN-014"),
         ("warn035_scalar_into_array.xql", "WARN-035"),
         ("warn037_loglevel_severity.xql", "WARN-037"),

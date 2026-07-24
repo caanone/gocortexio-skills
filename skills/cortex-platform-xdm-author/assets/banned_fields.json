@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "description": "Banned XDM fields: real Cortex paths that must NEVER be assigned in a MODEL rule because they belong to an internal or non-event data model. A field here is genuine (it appears in the upstream Cortex XDM schema) but is not part of the event/log data model a MODEL rule validates against, so assigning it is rejected at compile time with 'not part of the selected data model'. The linter reads this file for ERR-029; scripts/lint_rule.py flags any assignment to a banned path. Add new entries here (path, reason, alternative) and both the linter and the reference guard enforce them automatically.",
+  "banned": [
+    {
+      "path": "xdm.source.cloud.source_type",
+      "reason": "Internal-only XCloud asset-inventory field: the source asset type (example values t2.micro, t3.medium, gp2, gp3). It belongs to the XCloud asset data model, not the event/log surface a MODEL rule writes into, so Cortex rejects it with 'not part of the selected data model'.",
+      "alternative": "Map xdm.source.cloud.provider reliably, and set xdm.source.cloud.service (CLOUD_SERVICE_TYPE) only on a confident known match. If the raw service name maps to no constant, record it in the NOT MAPPED block rather than assigning a String home."
+    },
+    {
+      "path": "xdm.target.cloud.source_type",
+      "reason": "Internal-only XCloud asset-inventory field: the target asset type (example values t2.micro, t3.medium, gp2, gp3). It belongs to the XCloud asset data model, not the event/log surface a MODEL rule writes into, so Cortex rejects it with 'not part of the selected data model'.",
+      "alternative": "Map xdm.target.cloud.provider reliably, and set xdm.target.cloud.service (CLOUD_SERVICE_TYPE) only on a confident known match. If the raw service name maps to no constant, record it in the NOT MAPPED block rather than assigning a String home."
+    },
+    {
+      "path": "xdm.intermediate.cloud.source_type",
+      "reason": "Internal-only XCloud asset-inventory field: the intermediate asset type (example values t2.micro, t3.medium, gp2, gp3). It belongs to the XCloud asset data model, not the event/log surface a MODEL rule writes into, so Cortex rejects it with 'not part of the selected data model'.",
+      "alternative": "Map xdm.intermediate.cloud.provider reliably, and set xdm.intermediate.cloud.service (CLOUD_SERVICE_TYPE) only on a confident known match. If the raw service name maps to no constant, record it in the NOT MAPPED block rather than assigning a String home."
+    }
+  ]
+}

@@ -39,14 +39,21 @@ the cloud entity:
 | `xdm.source.cloud.provider` | the platform: `CLOUD_PROVIDER_AWS` / `_AZURE` / `_GCP` (map from the record's own identity, not a guess) |
 | `xdm.source.cloud.region` | AWS `awsRegion`, Azure region, GCP location |
 | `xdm.source.cloud.project` / `project_id` | GCP project; AWS `recipientAccountId` / Azure subscription go here or in the account field |
-| `xdm.source.cloud.source_type` | the raw service name string (a free-String field) -- this is where the vendor service name lives |
 | `xdm.source.cloud.service` | const-typed (`CLOUD_SERVICE_TYPE`) -- set ONLY on a confident known match; otherwise omit (see below) |
+
+Do NOT map the raw service name to `xdm.*.cloud.source_type`. That field is a
+banned internal-only XCloud asset attribute (it holds an asset type such as
+`t2.micro` / `gp3`), not part of any event data model, and Cortex rejects a
+MODEL rule that assigns it -- the linter blocks it with ERR-029. See
+[banned-fields.md](banned-fields.md).
 
 CLOUD_SERVICE_TYPE is a very large, fast-moving per-service enum with no complete
 authoritative source, so do NOT try to enumerate or complete it. Set
-`xdm.source.cloud.provider` reliably, keep the raw service string in
-`xdm.source.cloud.source_type`, and leave `xdm.source.cloud.service` unset unless
-a value confidently matches a known member (see [xdm-const.md](xdm-const.md)).
+`xdm.source.cloud.provider` reliably, and leave `xdm.source.cloud.service` unset
+unless a value confidently matches a known member (see
+[xdm-const.md](xdm-const.md)). When the raw service name matches no constant,
+record it in the NOT MAPPED block (or `xdm.event.description` if useful), not in a
+String field.
 
 ## Deriving xdm.event.operation from the action name
 

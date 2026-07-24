@@ -17,6 +17,9 @@ Public surface:
     xdm_path_is_array    (path) -> bool
     const_group_for      (const) -> Optional[str]
     all_consts           () -> set(full XDM_CONST.* members)
+    load_banned_fields   () -> dict {path: {reason, alternative}}
+    banned_field         (path) -> Optional[dict]
+    is_banned_field      (path) -> bool
 
 Python 3.9+ stdlib only.
 """
@@ -40,6 +43,10 @@ CONST_PATH = REFERENCES_DIR / "xdm-const.md"
 MITRE_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "mitre_crosswalk.json"
 HTTP_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "http_status_crosswalk.json"
 KERBEROS_CROSSWALK_PATH = SELF_DIR.parent / "assets" / "kerberos_crosswalk.json"
+# Banned fields: real Cortex XDM paths that must never be assigned in a MODEL
+# rule (internal / non-event data models). Ships as a machine-readable asset
+# so the linter (ERR-029) and the reference guard share one source of truth.
+BANNED_FIELDS_PATH = SELF_DIR.parent / "assets" / "banned_fields.json"
 
 # A schema line is ``  xdm.foo.bar -- TYPE`` with an optional ``(Array)``
 # suffix. The double-dash separator matches the ASCII convention used
@@ -62,6 +69,7 @@ _FORCED_ARRAY_PATHS = {
 _paths_cache: Optional[Dict[str, dict]] = None
 _consts_cache: Optional[Dict[str, Set[str]]] = None
 _const_group_cache: Optional[Dict[str, str]] = None
+_banned_cache: Optional[Dict[str, dict]] = None
 
 
 def _read(path: Path) -> str:
@@ -251,3 +259,40 @@ def xdm_path_is_array(path: str) -> bool:
     """True if ``path`` is an Array-typed (or arraycreate-required) field."""
     meta = load_xdm_paths().get(path)
     return bool(meta and meta["is_array"])
+
+
+def load_banned_fields() -> Dict[str, dict]:
+    """Return ``{path: {"reason": str, "alternative": str}}`` parsed from
+    ``assets/banned_fields.json``.
+
+    A banned field is a genuine Cortex XDM path that must never be
+    assigned in a MODEL rule because it belongs to an internal or
+    non-event data model (it is rejected at compile time with 'not part
+    of the selected data model'). This is distinct from an invented path
+    (ERR-020): the field is real, just off-limits."""
+    global _banned_cache
+    if _banned_cache is not None:
+        return _banned_cache
+    raw = json.loads(_read(BANNED_FIELDS_PATH))
+    banned: Dict[str, dict] = {}
+    for entry in raw.get("banned", []):
+        path = entry.get("path")
+        if not path:
+            continue
+        banned[path] = {
+            "reason": entry.get("reason", ""),
+            "alternative": entry.get("alternative", ""),
+        }
+    _banned_cache = banned
+    return _banned_cache
+
+
+def banned_field(path: str) -> Optional[dict]:
+    """Return the ``{reason, alternative}`` entry for a banned path, or
+    None when the path is not banned."""
+    return load_banned_fields().get(path)
+
+
+def is_banned_field(path: str) -> bool:
+    """True if ``path`` is on the banned list."""
+    return path in load_banned_fields()

@@ -57,7 +57,6 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.source.cloud.provider -- XDM_CONST.CLOUD_PROVIDER
   xdm.source.cloud.region -- String
   xdm.source.cloud.service -- XDM_CONST.CLOUD_SERVICE_TYPE
-  xdm.source.cloud.source_type -- String
   xdm.source.cloud.zone -- String
   xdm.source -- String
   xdm.source.asn -- String
@@ -180,7 +179,6 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.target.cloud.provider -- XDM_CONST.CLOUD_PROVIDER
   xdm.target.cloud.region -- String
   xdm.target.cloud.service -- XDM_CONST.CLOUD_SERVICE_TYPE
-  xdm.target.cloud.source_type -- String
   xdm.target.cloud.zone -- String
   xdm.target.domain -- String
   xdm.target.file -- String
@@ -358,7 +356,6 @@ This file is a snapshot of the published XDM field set. Refresh it when the sche
   xdm.intermediate.cloud.provider -- XDM_CONST.CLOUD_PROVIDER
   xdm.intermediate.cloud.region -- String
   xdm.intermediate.cloud.service -- XDM_CONST.CLOUD_SERVICE_TYPE
-  xdm.intermediate.cloud.source_type -- String
   xdm.intermediate.cloud.zone -- String
   xdm.intermediate -- String
   xdm.intermediate.asn -- String

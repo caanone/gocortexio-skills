@@ -60,7 +60,6 @@ filter
         coalesce(tmp_op, "sign-in"), " by ", coalesce(tmp_user, "?"),
         if(tmp_resource != null, concat(" on ", tmp_resource), "")),
     xdm.source.cloud.provider = XDM_CONST.CLOUD_PROVIDER_AZURE,
-    xdm.source.cloud.source_type = coalesce(tmp_op_provider, tmp_app),
     xdm.source.ipv4 = if(tmp_ip ~= "^\d+\.\d+\.\d+\.\d+$", tmp_ip, null),
     xdm.source.ipv6 = if(to_string(tmp_ip) ~= ":", tmp_ip, null),
     xdm.source.port = to_integer(0),
@@ -109,9 +108,11 @@ filter
 - Shared identity / address. `coalesce(caller, userPrincipalName)` and
   `coalesce(callerIpAddress, ipAddress)` unify the two shapes onto one drain,
   and the IPv4 map is gated on a dotted-quad shape.
-- Cloud entity. `provider = CLOUD_PROVIDER_AZURE`; the raw provider / app goes to
-  the free-String `xdm.source.cloud.source_type`; `cloud.service`
-  (CLOUD_SERVICE_TYPE) is not set.
+- Cloud entity. `provider = CLOUD_PROVIDER_AZURE`; `cloud.service`
+  (CLOUD_SERVICE_TYPE) is not set. The raw provider prefix already surfaces in
+  `xdm.event.type` (the `coalesce(tmp_category, tmp_op_provider, ...)` fallback),
+  so it is not routed to `xdm.source.cloud.source_type` -- a banned XCloud asset
+  field (lint ERR-029). See [banned-fields.md](../banned-fields.md).
 
 ## NOT MAPPED, with reasons
 
@@ -123,8 +124,8 @@ NOT MAPPED
                   posture; revisit under an auth-risk mapping, not a core field
   correlationId / tenantId -- correlation ids; add to session / cloud fields
                   when correlating a request chain
-  cloud.service (CLOUD_SERVICE_TYPE) -- not completable; raw provider kept in
-                  xdm.source.cloud.source_type
+  cloud.service (CLOUD_SERVICE_TYPE) -- not completable; raw provider already in
+                  xdm.event.type (never xdm.source.cloud.source_type, a banned field)
 ```
 
 ## Checklist
@@ -135,6 +136,6 @@ NOT MAPPED
 [ ] sign-in tagged AUTHENTICATION + CLOUD, auth mandatory set padded
 [ ] outcome: resultType for Activity, status.errorCode==0 for sign-in
 [ ] shared caller/upn and callerIpAddress/ipAddress via coalesce
-[ ] cloud.provider = AZURE; raw provider in cloud.source_type; cloud.service omitted
+[ ] cloud.provider = AZURE; cloud.service omitted; raw provider in event.type (not source_type)
 [ ] unknown record -> GOCORTEX_UNMODELLED; proven with verify_rule.py
 ```

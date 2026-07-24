@@ -49,7 +49,6 @@ filter
         tmp_method != null, XDM_CONST.OUTCOME_SUCCESS),
     xdm.event.description = concat(coalesce(tmp_method, "gcp"), " on ", coalesce(tmp_res, "?")),
     xdm.source.cloud.provider = XDM_CONST.CLOUD_PROVIDER_GCP,
-    xdm.source.cloud.source_type = tmp_service,
     xdm.source.cloud.project_id = tmp_project,
     xdm.source.ipv4 = if(tmp_ip ~= "^\d+\.\d+\.\d+\.\d+$", tmp_ip, null),
     xdm.source.ipv6 = if(to_string(tmp_ip) ~= ":", tmp_ip, null),
@@ -95,8 +94,11 @@ filter
   is a machine identity (`IDENTITY_TYPE_MACHINE` / `USER_TYPE_SERVICE_ACCOUNT`);
   a human principal is a regular user.
 - Cloud entity. `provider = CLOUD_PROVIDER_GCP`, `project_id` from
-  `resource.labels.project_id`, and the raw `serviceName` in the free-String
-  `xdm.source.cloud.source_type`; `cloud.service` (CLOUD_SERVICE_TYPE) is not set.
+  `resource.labels.project_id`; `cloud.service` (CLOUD_SERVICE_TYPE) is not set.
+  The raw `serviceName` already surfaces in `xdm.event.type` (the
+  `coalesce(tmp_service, "gcp")` drain), so it is not routed to
+  `xdm.source.cloud.source_type` -- a banned XCloud asset field (lint ERR-029).
+  See [banned-fields.md](../banned-fields.md).
 - Cloud Audit is management-plane. Every record is CLOUD (no auth tag); GCP
   interactive sign-ins arrive on a different feed, so there is no auth branch
   here and no transport tuple to pad.
@@ -111,8 +113,8 @@ NOT MAPPED
                       reach an element with arrayindex(json_extract_array(...), N)
   resource.labels.* (beyond project_id) -- zone / location / instance labels;
                       add region/zone when the sample carries them
-  cloud.service (CLOUD_SERVICE_TYPE) -- not completable; raw serviceName kept in
-                      xdm.source.cloud.source_type
+  cloud.service (CLOUD_SERVICE_TYPE) -- not completable; raw serviceName already in
+                      xdm.event.type (never xdm.source.cloud.source_type, a banned field)
 ```
 
 ## Checklist
@@ -123,6 +125,6 @@ NOT MAPPED
 [ ] deep protoPayload.* paths; principalEmail -> user; callerIp -> ipv4
 [ ] outcome: missing/0 status.code -> SUCCESS, non-zero -> FAILED
 [ ] gserviceaccount principal -> machine identity / service account
-[ ] cloud.provider = GCP; project_id set; raw service in cloud.source_type
+[ ] cloud.provider = GCP; project_id set; raw service in event.type (not source_type)
 [ ] unknown record -> GOCORTEX_UNMODELLED; proven with verify_rule.py
 ```

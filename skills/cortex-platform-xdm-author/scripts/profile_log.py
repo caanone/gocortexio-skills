@@ -1406,8 +1406,9 @@ def detect_cloud(fields: dict) -> dict:
             "xdm.event.operation = the verb DERIVED from the action-naming "
             "convention, and xdm.event.tags = CLOUD (plus AUTHENTICATION for a "
             "console login / interactive sign-in). Set xdm.source.cloud.provider "
-            "reliably; keep the raw service name in xdm.source.cloud.source_type "
-            "and set xdm.source.cloud.service only on a confident known match. "
+            "reliably and set xdm.source.cloud.service only on a confident known "
+            "match; otherwise record the raw service name in NOT MAPPED (never "
+            "xdm.source.cloud.source_type -- it is banned, lint ERR-029). "
             "See references/cloud-mapping.md."
         )
     return out

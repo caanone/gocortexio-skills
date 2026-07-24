@@ -29,7 +29,7 @@ from pathlib import Path
 # Make ``_helpers`` importable regardless of unittest invocation form.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _helpers import bundle_root, read_text  # noqa: E402
+from _helpers import bundle_root, read_json, read_text  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -199,8 +199,19 @@ def cited_xdm_consts():
             yield rel, m.group(0)
 
 
+def banned_registry_paths():
+    """Paths in assets/banned_fields.json. A banned field is a real Cortex
+    path a MODEL rule must never assign (lint ERR-029); the references cite
+    these as counter-examples, so citation is legitimate even though the
+    path is deliberately absent from xdm-schema.md."""
+    raw = read_json("assets/banned_fields.json")
+    return {e["path"] for e in raw.get("banned", []) if e.get("path")}
+
+
 def is_allowed_path(path: str) -> bool:
     if path in ALLOW_KNOWN_BAD_XDM_PATHS:
+        return True
+    if path in banned_registry_paths():
         return True
     return any(path.startswith(p) for p in ALLOW_KNOWN_BAD_PATH_PREFIXES)
 
